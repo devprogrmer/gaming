@@ -1,10 +1,13 @@
 """Command-line interface for the gaming network-discovery tool.
 
 Subcommands:
+    menu      launch the interactive, menu-driven IP health scanner
     sources   list available discovery sources
     discover  discover + filter + normalize prefixes (no reachability)
     check     run reachability/ports/global checks on given prefixes
     run       full pipeline: discover -> process -> reachability -> report
+
+Running ``gaming`` with no subcommand launches the interactive menu.
 """
 
 from __future__ import annotations
@@ -76,7 +79,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--quiet", "-q", action="store_true", help="only log errors")
 
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command", required=False)
+
+    # menu (interactive) — also the default when no subcommand is given.
+    sub.add_parser(
+        "menu",
+        help="launch the interactive, menu-driven IP health scanner",
+    )
 
     # sources
     sub.add_parser("sources", help="list available discovery sources")
@@ -165,6 +174,14 @@ def _emit(records: list[IPRecord], args: argparse.Namespace) -> None:
 
 
 # ---- command handlers ----------------------------------------------------
+def cmd_menu(args: argparse.Namespace, config: Config) -> int:
+    # Imported lazily so the interactive subpackage (and its sqlite/data
+    # dependencies) is only loaded when actually launching the menu.
+    from .interactive.menu import run as run_menu
+
+    return run_menu()
+
+
 def cmd_sources(args: argparse.Namespace, config: Config) -> int:
     for name in available_sources():
         sys.stdout.write(f"{name}\n")
@@ -229,6 +246,7 @@ def cmd_run(args: argparse.Namespace, config: Config) -> int:
 
 
 _HANDLERS = {
+    "menu": cmd_menu,
     "sources": cmd_sources,
     "discover": cmd_discover,
     "check": cmd_check,
@@ -252,6 +270,10 @@ def main(argv: list[str] | None = None) -> int:
     _ensure_utf8_stdio()
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    # No subcommand -> launch the interactive menu (the default experience).
+    if args.command is None:
+        args.command = "menu"
 
     try:
         config = _config_from_args(args)

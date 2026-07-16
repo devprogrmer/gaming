@@ -13,6 +13,26 @@ def test_sources_command(capsys):
         assert name in out
 
 
+def test_menu_subcommand_invokes_menu(monkeypatch):
+    calls = []
+    import gaming.interactive.menu as menu
+
+    monkeypatch.setattr(menu, "run", lambda argv=None: calls.append("menu") or 0)
+    rc = main(["menu"])
+    assert rc == 0
+    assert calls == ["menu"]
+
+
+def test_no_subcommand_defaults_to_menu(monkeypatch):
+    calls = []
+    import gaming.interactive.menu as menu
+
+    monkeypatch.setattr(menu, "run", lambda argv=None: calls.append("menu") or 0)
+    rc = main([])
+    assert rc == 0
+    assert calls == ["menu"]
+
+
 def test_discover_offline_json(capsys):
     rc = main(["--offline", "discover", "--format", "json"])
     out = capsys.readouterr().out

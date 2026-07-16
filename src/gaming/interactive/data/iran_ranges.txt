@@ -1,0 +1,27 @@
+# Bundled Iranian IPv4 ranges (CIDR, one per line).
+#
+# Lines starting with "#" are comments and are ignored. These are well-known
+# allocations announced by major Iranian networks and datacenters. They are a
+# practical starter set for reachability testing, not an exhaustive list — add
+# your own from the "Manage IP ranges" menu.
+#
+# Format:  CIDR  [# optional label]
+
+2.144.0.0/13        # Iran Telecommunication (TCI) allocation
+5.160.0.0/16        # Iran Telecommunication Infrastructure (TIC)
+5.200.0.0/13        # Iranian ISP pool
+31.7.64.0/18        # Pars Online
+37.32.0.0/16        # Respina Networks
+37.156.0.0/16       # Mobile Communication Company of Iran (MCI)
+46.209.0.0/16       # Datak / Iranian datacenter
+78.38.0.0/15        # Shatel
+79.127.0.0/17       # Afranet
+80.191.0.0/16       # Iran Telecommunication
+85.15.0.0/17        # Iranian ISP pool
+91.99.0.0/16        # Irancell
+91.239.202.0/24     # ArvanCloud
+178.22.122.0/24     # Shecan resolver / CDN edge
+185.51.200.0/22     # Iran Telecommunication datacenter
+185.143.232.0/22    # Pars Pardazesh datacenter
+188.121.96.0/19     # Asiatech datacenter
+194.5.175.0/24      # ArvanCloud CDN/datacenter

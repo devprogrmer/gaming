@@ -1,0 +1,8 @@
+# gaming — runtime dependencies
+#
+# This tool is intentionally standard-library only: it runs on any Python
+# 3.11+ install with no third-party packages. This file is provided for
+# convention and CI; there is nothing to install for normal use.
+#
+# Development/test tooling lives in the "dev" optional-dependencies group in
+# pyproject.toml:  pip install -e ".[dev]"
