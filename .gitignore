@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.log
+.venv/
+venv/
+env/
+
+# Local report/output files produced by the CLI
+*.report.json
+foreign.json
+report.json
+out.json
+out.csv

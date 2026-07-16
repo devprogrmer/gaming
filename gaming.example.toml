@@ -1,0 +1,34 @@
+# gaming — example configuration (TOML)
+#
+# All values below match the built-in defaults. Copy this file, edit it, and
+# pass it with `gaming --config gaming.example.toml <command>`.
+
+[general]
+log_level = "INFO"      # DEBUG | INFO | WARNING | ERROR
+concurrency = 16        # max concurrent workers
+timeout = 5.0           # per-operation timeout in seconds
+
+[discovery]
+# Which discovery sources to run. See `gaming sources`.
+sources = ["rdap", "whois", "asn_bgp", "peeringdb", "rir"]
+# When true, sources return bundled sample data instead of live network calls.
+offline = false
+
+[filters]
+countries = []          # e.g. ["IR", "DE"]
+asns = []               # e.g. ["AS13335", "AS24940"]
+providers = []          # substrings, e.g. ["cloudflare", "arvan"]
+organizations = []      # substrings matched against org names
+iran_datacenter = false     # focus on Iranian datacenter-related ranges
+foreign_datacenter = false  # focus on foreign datacenter-related ranges
+
+[reachability]
+enabled = true
+method = "auto"         # auto | ping | tcp
+tcp_probe_port = 80     # port used by auto/tcp alive checks
+ports = []              # optional extra port scan, e.g. [22, 80, 443]
+
+[global_check]
+enabled = false         # perform global reachability via check-host.net
+provider = "check-host.net"
+max_targets = 10        # cap number of hosts probed globally

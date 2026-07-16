@@ -1,0 +1,35 @@
+name: Bug report
+description: Report a problem with the gaming CLI
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, including the exact command you ran.
+      placeholder: |
+        Command: gaming --offline discover --iran-datacenter
+        Expected: ...
+        Actual: ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / output
+      description: Paste relevant output. Re-run with `--log-level DEBUG` if possible.
+      render: shell
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `gaming --version`.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS and Python version (`python --version`).
+    validations:
+      required: true
