@@ -1,14 +1,24 @@
 # gaming
 
-[![CI](https://github.com/your-org/gaming/actions/workflows/ci.yml/badge.svg)](https://github.com/your-org/gaming/actions/workflows/ci.yml)
+[![CI](https://github.com/devprogrmer/gaming/actions/workflows/ci.yml/badge.svg)](https://github.com/devprogrmer/gaming/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 > **Note:** `gaming` is only the project name. This is **not** a video game, game engine, or launcher. It is a **network discovery and reachability analysis CLI tool**.
 
-`gaming` discovers IP ranges from public network data sources (RDAP, WHOIS, ASN/BGP, PeeringDB, RIR allocations), filters and normalizes the prefixes, checks reachability, optionally probes ports, optionally performs global reachability checks via check-host.net, and exports structured reports to the console, JSON, or CSV.
+## Description
 
-It is written for **Python 3.11+** and uses **only the standard library** — no third‑party runtime dependencies — so it runs anywhere Python does. Every network source degrades gracefully: if a live lookup fails or you pass `--offline`, the tool falls back to bundled sample data so the pipeline always produces output.
+`gaming` is a command-line tool that discovers IP ranges from public network
+data sources (RDAP, WHOIS, ASN/BGP, PeeringDB, RIR allocations), filters and
+normalizes the prefixes, checks their reachability, optionally probes ports and
+performs global reachability checks, and exports structured reports to the
+console, JSON, or CSV.
+
+It targets **Python 3.11+** and uses **only the standard library** — no
+third-party runtime dependencies — so it runs anywhere Python does. Every
+network source degrades gracefully: if a live lookup fails or you pass
+`--offline`, the tool falls back to bundled sample data so the pipeline always
+produces output.
 
 ---
 
@@ -17,30 +27,37 @@ It is written for **Python 3.11+** and uses **only the standard library** — no
 - **Automatic discovery** from pluggable sources: `rdap`, `whois`, `asn_bgp` (RIPEstat/BGP), `peeringdb`, `rir`.
 - **Filtering** by country, ASN, provider, and organization.
 - **Focus modes** for **Iranian datacenter** and **foreign datacenter** ranges.
-- **Normalization**: validation, de‑duplication with metadata merge, optional prefix collapsing.
-- **Reachability**: local alive checks (`ping`/`tcp`/`auto`), optional **port probing**.
-- **Global reachability** via check-host.net (opt‑in; only public IPs are submitted).
-- **Output** to console, JSON, and CSV. Each record includes: source, ASN, organization, country, prefix, alive status, global reachability, open ports, and notes.
-- **Concurrency** via thread pools, **configurable** via TOML + CLI, **logging**, **robust error handling**, and a **test suite**.
+- **Normalization**: prefix validation, de-duplication with metadata merge, and optional CIDR collapsing.
+- **Reachability**: local alive checks (`ping` / `tcp` / `auto`) and optional **TCP port probing**.
+- **Global reachability** via check-host.net (opt-in; only public IPs are submitted).
+- **Structured output** to console, JSON, and CSV. Each record includes: source, ASN, organization, country, prefix, alive status, global reachability, open ports, and notes.
+- **Concurrency** via thread pools, **layered configuration** (defaults → TOML → CLI), **logging**, **robust error handling**, and a **fully offline test suite**.
 
 ---
 
 ## Installation
 
+Requires Python **3.11 or newer** (it relies on the standard-library `tomllib`).
+
+Install from source:
+
 ```bash
+git clone https://github.com/devprogrmer/gaming.git
 cd gaming
-python -m pip install -e .        # installs the `gaming` console script
-# dev extras (pytest):
+python -m pip install .
+```
+
+Install in editable/development mode (adds the `gaming` console script and dev tooling):
+
+```bash
 python -m pip install -e ".[dev]"
 ```
 
-You can also run it without installing:
+Run without installing:
 
 ```bash
 PYTHONPATH=src python -m gaming --help
 ```
-
-Requires Python **3.11 or newer** (uses `tomllib`).
 
 ---
 
@@ -63,7 +80,7 @@ gaming check 1.1.1.1 8.8.8.0/24 --ports 80,443 --format console
 gaming --offline run --country IR --ports 80,443 --format json -o report.json
 ```
 
-> Global checks (`--global`) and non‑offline discovery reach out to the public
+> Global checks (`--global`) and non-offline discovery reach out to the public
 > internet. Use them only against infrastructure you are authorized to assess.
 
 ---
@@ -77,7 +94,7 @@ Global options (before the subcommand):
 | `--config, -c PATH` | Path to a TOML config file. |
 | `--log-level LEVEL` | `DEBUG` \| `INFO` \| `WARNING` \| `ERROR`. |
 | `--concurrency N` | Max concurrent workers. |
-| `--timeout SECONDS` | Per‑operation timeout. |
+| `--timeout SECONDS` | Per-operation timeout. |
 | `--offline` | Use bundled sample data instead of live network calls. |
 | `--quiet, -q` | Log errors only. |
 | `--version` | Print version. |
@@ -102,7 +119,9 @@ Full pipeline. Accepts all `discover` filter flags plus `--ports`, `--global`, `
 
 ## Configuration
 
-Configuration is layered: **built‑in defaults → TOML file → CLI overrides**. See [`gaming.example.toml`](gaming.example.toml) for a fully‑commented template. Load it with:
+Configuration is layered: **built-in defaults → TOML file → CLI overrides**. See
+[`gaming.example.toml`](gaming.example.toml) for a fully-commented template. Load
+it with:
 
 ```bash
 gaming --config gaming.example.toml run --format json
@@ -122,10 +141,10 @@ Each result row (console/JSON/CSV) contains:
 | `asn` | Autonomous System Number in `AS<n>` form. |
 | `organization` | Owning organization, when known. |
 | `country` | ISO country code. |
-| `provider` | Provider hint (lowercased substring‑matchable). |
+| `provider` | Provider hint (lowercased, substring-matchable). |
 | `prefix` | Normalized CIDR. |
-| `alive` | Local reachability (`true`/`false`/`null`). |
-| `global_reachable` | Global reachability via check-host.net (`true`/`false`/`null`). |
+| `alive` | Local reachability (`true` / `false` / `null`). |
+| `global_reachable` | Global reachability via check-host.net (`true` / `false` / `null`). |
 | `open_ports` | Ports found open during probing. |
 | `notes` | Provenance / diagnostic notes. |
 
@@ -156,7 +175,7 @@ src/gaming/
 ```
 
 **Design principles:** modular and extensible (add a source by implementing
-`Source` and registering it), dependency‑free, fail‑soft (a single failing
+`Source` and registering it), dependency-free, fail-soft (a single failing
 source or host never aborts the run), and fully testable offline via dependency
 injection and bundled sample data.
 
@@ -186,9 +205,9 @@ python -m pytest            # or: PYTHONPATH=src python -m pytest
 ```
 
 The suite is fully offline (no real network calls): sources use bundled sample
-data and reachability is monkeypatched. It covers models/normalization,
-config, filters (incl. IR/foreign focus), reporting, reachability logic,
-pipeline orchestration, and the CLI end‑to‑end.
+data and reachability is monkeypatched. It covers models/normalization, config,
+filters (incl. IR/foreign focus), reporting, reachability logic, pipeline
+orchestration, and the CLI end-to-end.
 
 ---
 
@@ -219,7 +238,7 @@ pip install dist/gaming-*.whl
 
 This tool performs network reconnaissance and reachability testing. Only use it
 against networks and hosts you own or are explicitly authorized to assess.
-Global checks submit target IPs to a third‑party service (check-host.net).
+Global checks submit target IPs to a third-party service (check-host.net).
 
 ## License
 

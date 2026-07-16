@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: Responsible use / security
-    url: https://github.com/your-org/gaming/blob/main/README.md#responsible-use
+    url: https://github.com/devprogrmer/gaming/blob/main/README.md#responsible-use
     about: Please read the responsible-use guidance before filing recon-related issues.

@@ -9,7 +9,7 @@ the development workflow, and how to extend the tool.
 Requires Python **3.11+**.
 
 ```bash
-git clone https://github.com/your-org/gaming
+git clone https://github.com/devprogrmer/gaming
 cd gaming
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate

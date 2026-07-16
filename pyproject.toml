@@ -43,10 +43,10 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/your-org/gaming"
-Repository = "https://github.com/your-org/gaming"
-Issues = "https://github.com/your-org/gaming/issues"
-Changelog = "https://github.com/your-org/gaming/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/devprogrmer/gaming"
+Repository = "https://github.com/devprogrmer/gaming"
+Issues = "https://github.com/devprogrmer/gaming/issues"
+Changelog = "https://github.com/devprogrmer/gaming/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [

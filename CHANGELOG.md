@@ -24,5 +24,5 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - CLI subcommands: `sources`, `discover`, `check`, `run`.
 - Test suite (52 tests, fully offline) and packaging for distribution.
 
-[Unreleased]: https://github.com/your-org/gaming/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/your-org/gaming/releases/tag/v0.1.0
+[Unreleased]: https://github.com/devprogrmer/gaming/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/devprogrmer/gaming/releases/tag/v0.1.0

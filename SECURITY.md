@@ -12,7 +12,7 @@ third-party service (check-host.net).
 If you discover a security issue in the tool itself (not in a network you
 scanned), please report it privately:
 
-- Open a [GitHub Security Advisory](https://github.com/your-org/gaming/security/advisories/new), or
+- Open a [GitHub Security Advisory](https://github.com/devprogrmer/gaming/security/advisories/new), or
 - Email the maintainers rather than filing a public issue.
 
 Please include reproduction steps and the output of `gaming --version`. We aim
