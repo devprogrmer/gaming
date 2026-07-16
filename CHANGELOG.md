@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- The `rdap`, `whois`, and `peeringdb` discovery sources now perform real
+  live lookups instead of falling straight through to sample data:
+  - `rdap` resolves each seed ASN's autnum (organization + country via the
+    RDAP bootstrap redirector) and enriches its announced prefixes.
+  - `whois` issues an inverse `-i origin ASxxxx` query over port 43 and parses
+    the returned RPSL `route:`/`route6:` objects.
+  - `peeringdb` resolves the network organization (`/api/net`) and emits one
+    record per exchange peering IP (`/api/netixlan`).
+  All three retain graceful offline/failure fallback to bundled sample data.
+
+### Added
+- Offline, mocked tests for the three live-lookup sources (15 tests).
+
 ## [0.1.0] - 2026-07-16
 
 ### Added

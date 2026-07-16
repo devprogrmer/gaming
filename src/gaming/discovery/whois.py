@@ -1,6 +1,8 @@
 """WHOIS-based discovery via the stdlib ``socket`` (port 43).
 
-When online it can query a WHOIS server for a seed object; offline or on
+Given seed ASNs, this source issues an inverse WHOIS query
+(``-i origin ASxxxx``) to a registry WHOIS server and parses the returned RPSL
+``route:`` / ``route6:`` objects into records. Offline (``--offline``) or on any
 failure it returns representative sample records.
 """
 
@@ -8,36 +10,37 @@ from __future__ import annotations
 
 import socket
 
-from ..models import IPRecord
+from ..models import IPRecord, normalize_asn
 from .base import Source
 
 
 class WhoisSource(Source):
     name = "whois"
 
-    _WHOIS_HOST = "whois.ripe.net"
+    _WHOIS_HOST = "whois.radb.net"
     _WHOIS_PORT = 43
 
     def _discover_online(self) -> list[IPRecord]:
-        # WHOIS free-text responses are not reliably machine-parseable across
-        # registries. We only attempt a live query when a single ASN seed is
-        # provided, and we parse conservatively; otherwise fall back.
         seeds = self.context.filters.asns
         if not seeds:
             return []
-        try:
-            self._raw_query(seeds[0])
-        except OSError:
-            return []
-        # Parsing WHOIS route objects reliably is out of scope for the sample
-        # implementation; return empty to trigger sample fallback.
-        return []
 
-    def _raw_query(self, obj: str) -> str:
+        records: list[IPRecord] = []
+        for seed in seeds:
+            asn = normalize_asn(seed)
+            try:
+                response = self._raw_query(f"-i origin {asn}")
+            except OSError as exc:
+                self.log.debug("WHOIS query failed for %s: %s", asn, exc)
+                continue
+            records.extend(self._parse_routes(response, asn))
+        return records
+
+    def _raw_query(self, query: str) -> str:
         with socket.create_connection(
             (self._WHOIS_HOST, self._WHOIS_PORT), timeout=self.context.timeout
         ) as sock:
-            sock.sendall(f"{obj}\r\n".encode())
+            sock.sendall(f"{query}\r\n".encode())
             chunks: list[bytes] = []
             while True:
                 data = sock.recv(4096)
@@ -45,6 +48,43 @@ class WhoisSource(Source):
                     break
                 chunks.append(data)
         return b"".join(chunks).decode("utf-8", errors="replace")
+
+    def _parse_routes(self, response: str, asn: str) -> list[IPRecord]:
+        """Parse RPSL ``route``/``route6`` objects from a WHOIS response.
+
+        RPSL objects are separated by blank lines; ``route:``/``route6:`` gives
+        the prefix and ``descr:``/``origin:`` provide supporting metadata.
+        """
+        records: list[IPRecord] = []
+        for block in response.split("\n\n"):
+            prefix: str | None = None
+            descr: str | None = None
+            for raw in block.splitlines():
+                key, sep, value = raw.partition(":")
+                if not sep:
+                    continue
+                key = key.strip().lower()
+                value = value.strip()
+                if key in ("route", "route6") and value:
+                    prefix = value
+                elif key == "descr" and value and descr is None:
+                    descr = value
+            if not prefix:
+                continue
+            try:
+                records.append(
+                    IPRecord(
+                        prefix=prefix,
+                        source=self.name,
+                        asn=asn,
+                        organization=descr,
+                        notes="WHOIS route object",
+                    )
+                )
+            except ValueError:
+                # Not a parseable prefix; skip it.
+                continue
+        return records
 
     def _sample_data(self) -> list[IPRecord]:
         return [
