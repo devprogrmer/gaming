@@ -9,10 +9,9 @@ from __future__ import annotations
 import tomllib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from .models import Filters
-
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "general": {
@@ -92,18 +91,14 @@ class Config:
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     out = dict(base)
     for key, value in override.items():
-        if (
-            key in out
-            and isinstance(out[key], dict)
-            and isinstance(value, dict)
-        ):
+        if key in out and isinstance(out[key], dict) and isinstance(value, dict):
             out[key] = _deep_merge(out[key], value)
         else:
             out[key] = value
     return out
 
 
-def load_config(path: Optional[str | Path] = None) -> Config:
+def load_config(path: str | Path | None = None) -> Config:
     """Load configuration from an optional TOML file, merged over defaults."""
     merged = DEFAULT_CONFIG
     if path is not None:

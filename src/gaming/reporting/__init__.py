@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from .console import render_console
-from .json_export import to_json, write_json
 from .csv_export import to_csv, write_csv
+from .json_export import to_json, write_json
 
 __all__ = [
     "render_console",

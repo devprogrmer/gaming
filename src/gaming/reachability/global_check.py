@@ -13,10 +13,8 @@ from __future__ import annotations
 
 import ipaddress
 import time
-from typing import Optional
 
 from ..logging_setup import get_logger
-from ..models import IPRecord
 from ..utils.http import HTTPError, get_json
 
 log = get_logger("gaming.reachability.global")
@@ -47,7 +45,7 @@ def global_reachability(
     port: int = 80,
     poll_attempts: int = 3,
     poll_interval: float = 2.0,
-) -> Optional[bool]:
+) -> bool | None:
     """Query check-host.net for global reachability of ``host``.
 
     Returns True if any node reports success, False if nodes ran but none
@@ -85,7 +83,7 @@ def global_reachability(
     return None
 
 
-def _interpret(results: dict) -> Optional[bool]:
+def _interpret(results: dict) -> bool | None:
     """Interpret check-host.net per-node results.
 
     Node value shapes vary; we treat any node whose result indicates a
@@ -94,7 +92,7 @@ def _interpret(results: dict) -> Optional[bool]:
     if not isinstance(results, dict):
         return None
     seen_any = False
-    for node, value in results.items():
+    for value in results.values():
         if value is None:
             # Still pending for this node.
             continue
@@ -111,9 +109,7 @@ def _node_ok(value) -> bool:
         if isinstance(value, list) and value:
             first = value[0]
             if isinstance(first, dict):
-                return "error" not in first and (
-                    "time" in first or "address" in first
-                )
+                return "error" not in first and ("time" in first or "address" in first)
             if isinstance(first, list) and first:
                 inner = first[0]
                 if isinstance(inner, list) and inner:

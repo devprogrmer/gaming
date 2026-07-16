@@ -14,8 +14,8 @@ import ipaddress
 import platform
 import socket
 import subprocess
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Iterable
 
 from ..logging_setup import get_logger
 from ..models import IPRecord
@@ -46,9 +46,7 @@ def _ping(host: str, timeout: float) -> bool:
 def _tcp_connect(host: str, port: int, timeout: float) -> bool:
     try:
         family = (
-            socket.AF_INET6
-            if ipaddress.ip_address(host).version == 6
-            else socket.AF_INET
+            socket.AF_INET6 if ipaddress.ip_address(host).version == 6 else socket.AF_INET
         )
     except ValueError:
         family = socket.AF_INET

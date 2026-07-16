@@ -5,26 +5,25 @@ reachability -> reporting together with concurrency and error handling.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional
 
 from .config import Config
-from .discovery import build_source, DiscoveryContext
+from .discovery import DiscoveryContext, build_source
 from .logging_setup import get_logger
 from .models import Filters, IPRecord
 from .processing import apply_filters, normalize_records
 from .processing.normalize import collapse_prefixes
+from .reachability.global_check import global_reachability
 from .reachability.local import check_alive_bulk
 from .reachability.ports import probe_records
-from .reachability.global_check import global_reachability
 
 log = get_logger("gaming.pipeline")
 
 
 def discover(
     config: Config,
-    filters: Optional[Filters] = None,
+    filters: Filters | None = None,
     *,
-    sources: Optional[list[str]] = None,
+    sources: list[str] | None = None,
 ) -> list[IPRecord]:
     """Run all configured discovery sources concurrently and merge results."""
     filters = filters or config.to_filters()
@@ -127,7 +126,7 @@ def _run_global_checks(records: list[IPRecord], config: Config) -> None:
 def run_pipeline(
     config: Config,
     *,
-    sources: Optional[list[str]] = None,
+    sources: list[str] | None = None,
     collapse: bool = False,
 ) -> list[IPRecord]:
     """Full pipeline: discover -> process -> reachability."""

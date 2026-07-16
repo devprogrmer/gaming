@@ -6,12 +6,12 @@ Sources are registered in :data:`REGISTRY` and looked up by name.
 
 from __future__ import annotations
 
-from .base import Source, DiscoveryContext
-from .rdap import RDAPSource
-from .whois import WhoisSource
 from .asn_bgp import ASNBGPSource
+from .base import DiscoveryContext, Source
 from .peeringdb import PeeringDBSource
+from .rdap import RDAPSource
 from .rir import RIRSource
+from .whois import WhoisSource
 
 REGISTRY: dict[str, type[Source]] = {
     "rdap": RDAPSource,

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import ipaddress
-from dataclasses import dataclass, field, asdict
-from typing import Any, Iterable, Optional
+from collections.abc import Iterable
+from dataclasses import asdict, dataclass, field
+from typing import Any
 
 
 @dataclass(slots=True)
@@ -17,13 +18,13 @@ class IPRecord:
 
     prefix: str
     source: str = "unknown"
-    asn: Optional[str] = None
-    organization: Optional[str] = None
-    country: Optional[str] = None
-    provider: Optional[str] = None
+    asn: str | None = None
+    organization: str | None = None
+    country: str | None = None
+    provider: str | None = None
     # Reachability results (populated later in the pipeline).
-    alive: Optional[bool] = None
-    global_reachable: Optional[bool] = None
+    alive: bool | None = None
+    global_reachable: bool | None = None
     open_ports: list[int] = field(default_factory=list)
     notes: str = ""
 

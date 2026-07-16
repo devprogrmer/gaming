@@ -4,7 +4,7 @@ the Iranian- and foreign-datacenter focus toggles.
 
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 
 from ..logging_setup import get_logger
 from ..models import Filters, IPRecord
@@ -65,9 +65,7 @@ _FOREIGN_DC_HINTS = (
 
 
 def _text(rec: IPRecord) -> str:
-    return " ".join(
-        x for x in (rec.organization, rec.provider) if x
-    ).lower()
+    return " ".join(x for x in (rec.organization, rec.provider) if x).lower()
 
 
 def _is_datacenter(rec: IPRecord) -> bool:
@@ -125,14 +123,18 @@ def matches(rec: IPRecord, filters: Filters) -> bool:
 def _is_datacenter_or_ir(rec: IPRecord) -> bool:
     # For the Iran focus, treat any IR-country record or datacenter-ish org as
     # a datacenter candidate (allocation data often lacks org text).
-    return _is_datacenter(rec) or rec.country == "IR" or any(
-        h in _text(rec) for h in _IR_PROVIDER_HINTS
+    return (
+        _is_datacenter(rec)
+        or rec.country == "IR"
+        or any(h in _text(rec) for h in _IR_PROVIDER_HINTS)
     )
 
 
 def _is_datacenter_or_known(rec: IPRecord) -> bool:
-    return _is_datacenter(rec) or any(h in _text(rec) for h in _FOREIGN_DC_HINTS) or bool(
-        rec.country and rec.country != "IR"
+    return (
+        _is_datacenter(rec)
+        or any(h in _text(rec) for h in _FOREIGN_DC_HINTS)
+        or bool(rec.country and rec.country != "IR")
     )
 
 

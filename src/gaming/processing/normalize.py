@@ -9,7 +9,7 @@ Responsibilities:
 from __future__ import annotations
 
 import ipaddress
-from typing import Iterable
+from collections.abc import Iterable
 
 from ..logging_setup import get_logger
 from ..models import IPRecord
@@ -84,9 +84,8 @@ def collapse_prefixes(records: Iterable[IPRecord]) -> list[IPRecord]:
                 )
                 # Inherit org/provider from any contained member.
                 for m in members:
-                    if (
-                        m.network.version == supernet.version
-                        and m.network.subnet_of(supernet)
+                    if m.network.version == supernet.version and m.network.subnet_of(
+                        supernet
                     ):
                         _merge(rep, m)
             out.append(rep)

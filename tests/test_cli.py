@@ -60,7 +60,14 @@ def test_run_pipeline_offline(capsys, monkeypatch):
 
     monkeypatch.setattr(local, "check_alive", lambda host, **kw: True)
     rc = main(
-        ["--offline", "run", "--foreign-datacenter", "--no-reachability", "--format", "json"]
+        [
+            "--offline",
+            "run",
+            "--foreign-datacenter",
+            "--no-reachability",
+            "--format",
+            "json",
+        ]
     )
     out = capsys.readouterr().out
     assert rc == 0

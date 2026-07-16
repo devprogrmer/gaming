@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from typing import Optional
 
 from . import __version__
 from .config import Config, apply_overrides, load_config
@@ -22,7 +21,7 @@ from .pipeline import check_reachability, discover, process, run_pipeline
 from .reporting import export
 
 
-def _split_csv(value: Optional[str]) -> list[str]:
+def _split_csv(value: str | None) -> list[str]:
     if not value:
         return []
     return [v.strip() for v in value.split(",") if v.strip()]
@@ -93,12 +92,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     # check
     p_check = sub.add_parser("check", help="run reachability checks on given prefixes")
-    p_check.add_argument(
-        "prefixes", nargs="+", help="one or more IPs/CIDRs to check"
-    )
+    p_check.add_argument("prefixes", nargs="+", help="one or more IPs/CIDRs to check")
     p_check.add_argument("--ports", help="comma-separated ports to probe, e.g. 80,443")
     p_check.add_argument(
-        "--global", dest="global_check", action="store_true",
+        "--global",
+        dest="global_check",
+        action="store_true",
         help="perform global reachability checks (check-host.net)",
     )
     p_check.add_argument(
@@ -113,7 +112,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--sources", help="comma-separated subset of sources to use")
     p_run.add_argument("--ports", help="comma-separated ports to probe")
     p_run.add_argument(
-        "--global", dest="global_check", action="store_true",
+        "--global",
+        dest="global_check",
+        action="store_true",
         help="perform global reachability checks (check-host.net)",
     )
     p_run.add_argument(
@@ -247,7 +248,7 @@ def _ensure_utf8_stdio() -> None:
                 pass
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     _ensure_utf8_stdio()
     parser = build_parser()
     args = parser.parse_args(argv)

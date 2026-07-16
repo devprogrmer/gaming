@@ -10,7 +10,7 @@ import json
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Optional
+from typing import Any
 
 from ..logging_setup import get_logger
 
@@ -28,7 +28,7 @@ def get_text(
     *,
     timeout: float = 5.0,
     retries: int = 2,
-    headers: Optional[dict[str, str]] = None,
+    headers: dict[str, str] | None = None,
 ) -> str:
     """Fetch a URL and return the response body as text.
 
@@ -38,7 +38,7 @@ def get_text(
     if headers:
         hdrs.update(headers)
 
-    last_exc: Optional[Exception] = None
+    last_exc: Exception | None = None
     for attempt in range(retries + 1):
         try:
             req = urllib.request.Request(url, headers=hdrs)
@@ -58,7 +58,7 @@ def get_json(
     *,
     timeout: float = 5.0,
     retries: int = 2,
-    headers: Optional[dict[str, str]] = None,
+    headers: dict[str, str] | None = None,
 ) -> Any:
     """Fetch a URL and parse the body as JSON."""
     body = get_text(url, timeout=timeout, retries=retries, headers=headers)
@@ -74,7 +74,7 @@ def post_json(
     *,
     timeout: float = 5.0,
     retries: int = 1,
-    headers: Optional[dict[str, str]] = None,
+    headers: dict[str, str] | None = None,
 ) -> Any:
     hdrs = {
         "User-Agent": _USER_AGENT,
@@ -85,7 +85,7 @@ def post_json(
         hdrs.update(headers)
     data = json.dumps(payload).encode("utf-8")
 
-    last_exc: Optional[Exception] = None
+    last_exc: Exception | None = None
     for attempt in range(retries + 1):
         try:
             req = urllib.request.Request(url, data=data, headers=hdrs, method="POST")

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import csv
 import io
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 from ..models import IPRecord
 

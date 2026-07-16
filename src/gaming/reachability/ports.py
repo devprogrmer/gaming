@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import ipaddress
 import socket
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Iterable
 
 from ..logging_setup import get_logger
 from ..models import IPRecord
@@ -42,9 +42,7 @@ def probe_ports(
         return []
     open_ports: list[int] = []
     with ThreadPoolExecutor(max_workers=max(1, min(concurrency, len(ports)))) as pool:
-        future_map = {
-            pool.submit(probe_port, host, p, timeout=timeout): p for p in ports
-        }
+        future_map = {pool.submit(probe_port, host, p, timeout=timeout): p for p in ports}
         for fut in as_completed(future_map):
             if fut.result():
                 open_ports.append(future_map[fut])

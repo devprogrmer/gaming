@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from .normalize import normalize_records, collapse_prefixes
 from .filters import apply_filters, matches
+from .normalize import collapse_prefixes, normalize_records
 
 __all__ = [
     "normalize_records",
