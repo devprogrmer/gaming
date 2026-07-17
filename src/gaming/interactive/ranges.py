@@ -1,13 +1,23 @@
 """Loading, parsing, sampling, and editing of IP ranges.
 
-Two scopes are supported:
+Two *scopes* ship bundled ranges:
 
     "iran"     bundled Iranian ranges  + user custom ranges tagged iran
     "foreign"  bundled foreign ranges  + user custom ranges tagged foreign
 
+On top of those, user/discovered ranges are organized into four **categories**
+that separate datacenter from CDN/cloud, for both origins::
+
+    iran_datacenter    iran_cdn    foreign_datacenter    foreign_cdn
+
 Bundled ranges ship as data files inside the package (``data/*_ranges.txt``).
-User-added ranges are appended to ``custom_ranges.txt`` under the app home so
-they persist between runs and survive reinstalls of the package.
+User-added and auto-discovered ranges are appended to ``custom_ranges.txt``
+under the app home so they persist between runs and survive reinstalls of the
+package. Each stored line is ``group,cidr,origin[,country,provider]`` where
+``group`` is a scope or a category and ``origin`` is ``custom`` or
+``discovered``. The trailing ``country``/``provider`` carry the metadata needed
+for latency-by-country reporting. Legacy two-field ``group,cidr`` lines still
+parse (origin defaults to ``custom``, metadata empty).
 
 Large CIDRs are expanded into a bounded, evenly-spaced sample of host
 addresses so scans stay responsive regardless of prefix size.
@@ -16,6 +26,8 @@ addresses so scans stay responsive regardless of prefix size.
 from __future__ import annotations
 
 import ipaddress
+from collections.abc import Iterable
+from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 
@@ -23,10 +35,42 @@ from . import paths
 
 SCOPES = ("iran", "foreign")
 
+#: The four category keys that separate datacenter from CDN/cloud per origin.
+CATEGORIES = (
+    "iran_datacenter",
+    "iran_cdn",
+    "foreign_datacenter",
+    "foreign_cdn",
+)
+
+#: Which categories make up each legacy scope, so scanning ``iran`` /
+#: ``foreign`` keeps working after the split into categories.
+_SCOPE_CATEGORIES = {
+    "iran": ("iran_datacenter", "iran_cdn"),
+    "foreign": ("foreign_datacenter", "foreign_cdn"),
+}
+
+#: Every group name that may appear in the custom-ranges file.
+_GROUPS = (*SCOPES, *CATEGORIES)
+
+#: Valid origin markers for a stored custom/discovered entry.
+_ORIGINS = ("custom", "discovered")
+
 _BUNDLED = {
     "iran": "iran_ranges.txt",
     "foreign": "foreign_ranges.txt",
 }
+
+
+@dataclass(slots=True)
+class RangeEntry:
+    """A stored custom/discovered range with its origin and metadata."""
+
+    cidr: str
+    origin: str = "custom"
+    country: str | None = None
+    provider: str | None = None
+
 
 
 def _parse_line(line: str) -> str | None:
@@ -62,13 +106,14 @@ def _custom_file() -> Path:
     return paths.custom_ranges_path()
 
 
-def _read_custom() -> dict[str, list[str]]:
-    """Read the custom ranges file into ``{scope: [cidr, ...]}``.
+def _read_custom() -> dict[str, list[RangeEntry]]:
+    """Read the custom ranges file into ``{group: [RangeEntry, ...]}``.
 
-    The file stores one entry per line as ``scope,cidr``. Unknown scopes and
-    malformed lines are ignored.
+    Each line is ``group,cidr[,origin[,country[,provider]]]``. ``group`` is a
+    scope or category; ``origin`` defaults to ``custom`` when absent so legacy
+    two-field files still load. Unknown groups and malformed lines are ignored.
     """
-    out: dict[str, list[str]] = {scope: [] for scope in SCOPES}
+    out: dict[str, list[RangeEntry]] = {group: [] for group in _GROUPS}
     path = _custom_file()
     if not path.exists():
         return out
@@ -76,66 +121,210 @@ def _read_custom() -> dict[str, list[str]]:
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        scope, _, rest = line.partition(",")
-        scope = scope.strip().lower()
-        cidr = _parse_line(rest)
-        if scope in out and cidr:
-            out[scope].append(cidr)
+        parts = [p.strip() for p in line.split(",")]
+        group = parts[0].lower()
+        cidr = _parse_line(parts[1]) if len(parts) > 1 else None
+        origin = parts[2].lower() if len(parts) > 2 and parts[2] else "custom"
+        if origin not in _ORIGINS:
+            origin = "custom"
+        country = parts[3].upper() if len(parts) > 3 and parts[3] else None
+        provider = parts[4] if len(parts) > 4 and parts[4] else None
+        if group in out and cidr:
+            out[group].append(RangeEntry(cidr, origin, country, provider))
     return out
 
 
-def _write_custom(data: dict[str, list[str]]) -> None:
-    lines = ["# User custom ranges — one 'scope,cidr' entry per line."]
-    for scope in SCOPES:
-        for cidr in data.get(scope, []):
-            lines.append(f"{scope},{cidr}")
+def _write_custom(data: dict[str, list[RangeEntry]]) -> None:
+    lines = [
+        "# User custom/discovered ranges — "
+        "'group,cidr,origin,country,provider' per line."
+    ]
+    for group in _GROUPS:
+        for e in data.get(group, []):
+            lines.append(
+                f"{group},{e.cidr},{e.origin},{e.country or ''},{e.provider or ''}"
+            )
     _custom_file().write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _validate_group(group: str) -> str:
+    group = group.lower()
+    if group not in _GROUPS:
+        raise ValueError(
+            f"unknown group: {group!r} (expected a scope {SCOPES} or "
+            f"category {CATEGORIES})"
+        )
+    return group
+
+
 def load_ranges(scope: str) -> list[str]:
-    """Return the merged, de-duplicated CIDR list for a scope."""
+    """Return the merged, de-duplicated CIDR list for a scope.
+
+    Combines bundled ranges with any custom/discovered entries stored under the
+    scope *or* its member categories, so ``load_ranges("iran")`` includes
+    ``iran_datacenter`` and ``iran_cdn`` too.
+    """
     scope = scope.lower()
     if scope not in SCOPES:
         raise ValueError(f"unknown scope: {scope!r} (expected one of {SCOPES})")
+    custom = _read_custom()
+    stored: list[str] = [e.cidr for e in custom.get(scope, [])]
+    for category in _SCOPE_CATEGORIES[scope]:
+        stored.extend(e.cidr for e in custom.get(category, []))
+
     merged: list[str] = []
     seen: set[str] = set()
-    for cidr in _read_bundled(scope) + _read_custom().get(scope, []):
+    for cidr in _read_bundled(scope) + stored:
         if cidr not in seen:
             seen.add(cidr)
             merged.append(cidr)
     return merged
 
 
-def custom_ranges(scope: str) -> list[str]:
-    """Return only the user-added ranges for a scope."""
-    return list(_read_custom().get(scope.lower(), []))
+def load_scope_group(scope: str) -> list[str]:
+    """Alias for :func:`load_ranges` — the union of a scope's categories."""
+    return load_ranges(scope)
 
 
-def add_custom_range(scope: str, cidr: str) -> str:
+def load_category(category: str) -> list[str]:
+    """Return the de-duplicated stored CIDRs for a single category."""
+    return [e.cidr for e in category_entries(category)]
+
+
+def category_entries(category: str) -> list[RangeEntry]:
+    """Return the stored :class:`RangeEntry` items for a category (deduped)."""
+    category = category.lower()
+    if category not in CATEGORIES:
+        raise ValueError(f"unknown category: {category!r} (expected {CATEGORIES})")
+    out: list[RangeEntry] = []
+    seen: set[str] = set()
+    for entry in _read_custom().get(category, []):
+        if entry.cidr not in seen:
+            seen.add(entry.cidr)
+            out.append(entry)
+    return out
+
+
+def custom_ranges(group: str) -> list[str]:
+    """Return only the user-added/discovered CIDRs for a scope or category."""
+    group = group.lower()
+    return [e.cidr for e in _read_custom().get(group, [])]
+
+
+def save_discovered(
+    category: str,
+    cidrs: Iterable[str] | Iterable[RangeEntry],
+    *,
+    metadata: dict[str, tuple[str | None, str | None]] | None = None,
+) -> int:
+    """Persist auto-discovered CIDRs under a category. Returns count newly added.
+
+    ``cidrs`` may be plain CIDR strings or :class:`RangeEntry` objects. Optional
+    ``metadata`` maps a CIDR to ``(country, provider)`` used when a plain string
+    is given. CIDRs already stored under the category (custom *or* discovered)
+    are skipped, so repeated discovery never duplicates. Invalid CIDRs are
+    ignored rather than raising.
+    """
+    category = _validate_group(category)
+    if category not in CATEGORIES:
+        raise ValueError(f"save_discovered expects a category, got {category!r}")
+    metadata = metadata or {}
+    data = _read_custom()
+    existing = {e.cidr for e in data[category]}
+    added = 0
+    for raw in cidrs:
+        if isinstance(raw, RangeEntry):
+            normalized = _parse_line(raw.cidr)
+            country, provider = raw.country, raw.provider
+        else:
+            normalized = _parse_line(str(raw))
+            country, provider = metadata.get(str(raw), (None, None))
+        if normalized is None or normalized in existing:
+            continue
+        if normalized in metadata:  # normalized form may differ from the key
+            country, provider = metadata[normalized]
+        existing.add(normalized)
+        data[category].append(
+            RangeEntry(normalized, "discovered", country, provider)
+        )
+        added += 1
+    if added:
+        _write_custom(data)
+    return added
+
+
+def persist_records(records: Iterable[object]) -> dict[str, int]:
+    """Classify discovered records and auto-save their CIDRs by category.
+
+    Each record is bucketed with
+    :func:`gaming.processing.filters.classify_category`; unclassifiable records
+    are skipped. Country/provider metadata is carried through so later scans can
+    report latency by country. Returns a ``{category: newly_added_count}``
+    mapping (only categories that gained entries appear). This is the
+    persistence step that turns an in-memory discovery pass into durable,
+    scan-later managed ranges.
+    """
+    # Imported here to avoid a package import cycle (processing -> interactive).
+    from ..processing.filters import classify_category
+
+    grouped: dict[str, list[RangeEntry]] = {}
+    for rec in records:
+        category = classify_category(rec)
+        prefix = getattr(rec, "prefix", None)
+        if category is None or not prefix:
+            continue
+        country = getattr(rec, "country", None)
+        provider = getattr(rec, "provider", None) or getattr(
+            rec, "organization", None
+        )
+        grouped.setdefault(category, []).append(
+            RangeEntry(prefix, "discovered", country, provider)
+        )
+
+    added: dict[str, int] = {}
+    for category, entries in grouped.items():
+        count = save_discovered(category, entries)
+        if count:
+            added[category] = count
+    return added
+
+
+def add_custom_range(
+    group: str,
+    cidr: str,
+    *,
+    country: str | None = None,
+    provider: str | None = None,
+) -> str:
     """Validate and persist a custom range. Returns the normalized CIDR.
 
-    Raises ``ValueError`` on an invalid CIDR or unknown scope.
+    ``group`` may be a legacy scope (``iran``/``foreign``) or one of the four
+    categories. Raises ``ValueError`` on an invalid CIDR or unknown group.
     """
-    scope = scope.lower()
-    if scope not in SCOPES:
-        raise ValueError(f"unknown scope: {scope!r}")
+    group = _validate_group(group)
     normalized = _parse_line(cidr)
     if normalized is None:
         raise ValueError(f"invalid CIDR: {cidr!r}")
     data = _read_custom()
-    if normalized not in data[scope]:
-        data[scope].append(normalized)
+    if normalized not in {e.cidr for e in data[group]}:
+        data[group].append(
+            RangeEntry(normalized, "custom", country, provider)
+        )
         _write_custom(data)
     return normalized
 
 
-def remove_custom_range(scope: str, cidr: str) -> bool:
-    """Remove a custom range. Returns True if something was removed."""
-    scope = scope.lower()
+def remove_custom_range(group: str, cidr: str) -> bool:
+    """Remove a custom/discovered range. Returns True if something was removed."""
+    group = group.lower()
     normalized = _parse_line(cidr) or cidr.strip()
     data = _read_custom()
-    if scope in data and normalized in data[scope]:
-        data[scope].remove(normalized)
+    entries = data.get(group)
+    if not entries:
+        return False
+    kept = [e for e in entries if e.cidr != normalized]
+    if len(kept) != len(entries):
+        data[group] = kept
         _write_custom(data)
         return True
     return False

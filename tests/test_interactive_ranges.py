@@ -58,6 +58,87 @@ def test_custom_range_dedup():
     assert ranges.custom_ranges("foreign").count("198.51.100.0/24") == 1
 
 
+# ---- category storage ----------------------------------------------------
+def test_save_discovered_by_category_and_dedup():
+    added = ranges.save_discovered("foreign_cdn", ["1.1.1.0/24", "1.1.1.0/24"])
+    assert added == 1  # deduped within the call
+    assert ranges.load_category("foreign_cdn") == ["1.1.1.0/24"]
+    # Saving the same CIDR again adds nothing.
+    assert ranges.save_discovered("foreign_cdn", ["1.1.1.0/24"]) == 0
+
+
+def test_save_discovered_rejects_scope():
+    with pytest.raises(ValueError):
+        ranges.save_discovered("iran", ["1.1.1.0/24"])  # not a category
+
+
+def test_categories_are_separate():
+    ranges.save_discovered("iran_datacenter", ["185.51.200.0/22"])
+    ranges.save_discovered("iran_cdn", ["185.143.232.0/22"])
+    ranges.save_discovered("foreign_datacenter", ["5.9.0.0/16"])
+    ranges.save_discovered("foreign_cdn", ["104.16.0.0/13"])
+    assert ranges.load_category("iran_datacenter") == ["185.51.200.0/22"]
+    assert ranges.load_category("iran_cdn") == ["185.143.232.0/22"]
+    assert ranges.load_category("foreign_datacenter") == ["5.9.0.0/16"]
+    assert ranges.load_category("foreign_cdn") == ["104.16.0.0/13"]
+    # No cross-contamination.
+    assert "104.16.0.0/13" not in ranges.load_category("iran_cdn")
+
+
+def test_load_scope_group_unions_categories():
+    ranges.save_discovered("iran_datacenter", ["185.51.200.0/22"])
+    ranges.save_discovered("iran_cdn", ["185.143.232.0/22"])
+    merged = ranges.load_scope_group("iran")
+    assert "185.51.200.0/22" in merged
+    assert "185.143.232.0/22" in merged
+
+
+def test_category_entries_carry_metadata():
+    ranges.save_discovered(
+        "foreign_cdn",
+        ["1.1.1.0/24"],
+        metadata={"1.1.1.0/24": ("US", "cloudflare")},
+    )
+    entries = ranges.category_entries("foreign_cdn")
+    assert entries[0].country == "US"
+    assert entries[0].provider == "cloudflare"
+    assert entries[0].origin == "discovered"
+
+
+def test_persist_records_classifies_and_saves():
+    from gaming.models import IPRecord
+
+    recs = [
+        IPRecord(prefix="104.16.0.0/13", country="US", organization="Cloudflare"),
+        IPRecord(prefix="5.9.0.0/16", country="DE", organization="Hetzner Hosting"),
+        IPRecord(prefix="185.143.232.0/22", country="IR", organization="ArvanCloud CDN"),
+    ]
+    added = ranges.persist_records(recs)
+    assert added.get("foreign_cdn") == 1
+    assert added.get("foreign_datacenter") == 1
+    assert added.get("iran_cdn") == 1
+
+
+def test_legacy_two_field_file_still_parses(tmp_path, monkeypatch):
+    # Simulate an old custom_ranges.txt with the legacy 'scope,cidr' format.
+    home = tmp_path / "legacy"
+    home.mkdir()
+    monkeypatch.setenv("GAMING_HOME", str(home))
+    (home / "custom_ranges.txt").write_text(
+        "iran,203.0.113.0/24\nforeign,198.51.100.0/24\n", encoding="utf-8"
+    )
+    # Legacy scopes still load, defaulting origin to custom.
+    assert "203.0.113.0/24" in ranges.custom_ranges("iran")
+    assert "198.51.100.0/24" in ranges.custom_ranges("foreign")
+
+
+def test_remove_custom_range_by_category():
+    ranges.save_discovered("foreign_cdn", ["1.1.1.0/24"])
+    assert ranges.remove_custom_range("foreign_cdn", "1.1.1.0/24") is True
+    assert ranges.load_category("foreign_cdn") == []
+    assert ranges.remove_custom_range("foreign_cdn", "1.1.1.0/24") is False
+
+
 def test_expand_hosts_respects_sample_and_cap():
     hosts = ranges.expand_hosts(
         ["10.0.0.0/24", "10.0.1.0/24"], sample_per_range=4, max_hosts=6

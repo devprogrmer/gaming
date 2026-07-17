@@ -68,7 +68,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 gaming = ["py.typed"]
-"gaming.interactive.data" = ["*.txt"]
+"gaming.interactive.data" = ["*.txt", "*.toml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -42,27 +42,37 @@ def test_menu_eof_exits_cleanly(tmp_path):
     assert "Goodbye." in out
 
 
-def test_menu_scan_iran_persists(tmp_path, monkeypatch):
+def test_menu_scan_saved_persists(tmp_path, monkeypatch):
     # Deterministic, fast "network": every host is GOOD.
     monkeypatch.setattr(
         scanner,
         "scan_hosts",
         _fake_scan_hosts(lambda h: ProbeResult(h, sent=4, received=4, avg_ms=15.0)),
     )
+    from gaming.interactive import ranges
+
+    # Seed a saved category so there is something to scan.
+    ranges.save_discovered("iran_datacenter", ["185.51.200.0/22"])
     store = HistoryStore(tmp_path / "h.db")
-    # 1) scan Iran, then 0) exit.
-    out = _run_menu("1\n0\n", store)
-    assert "Iran scan" in out or "Scanning" in out
-    assert "GOOD" in out
+    # 1) scan saved -> origin Iran(1) -> class Datacenter(1) -> 0) exit.
+    out = _run_menu("1\n1\n1\n0\n", store)
+    assert "Scanning" in out
     assert "Saved as scan #" in out
-    # A scan was persisted.
+    assert "Alive IPs (copy-paste ready)" in out
     assert len(store.list_scans()) == 1
+
+
+def test_menu_scan_saved_empty_is_friendly(tmp_path):
+    store = HistoryStore(tmp_path / "h.db")
+    # No saved foreign_cdn ranges -> friendly message, no crash.
+    out = _run_menu("1\n2\n2\n0\n", store)
+    assert "No saved CIDRs for that selection" in out
 
 
 def test_menu_add_custom_range_flow(tmp_path):
     store = HistoryStore(tmp_path / "h.db")
-    # 5) manage -> 3) add -> iran -> CIDR -> 0) back -> 0) exit
-    script = "5\n3\niran\n203.0.113.0/24\n0\n0\n"
+    # 3) manage -> 4) add -> group iran -> CIDR -> 0) back -> 0) exit
+    script = "3\n4\niran\n203.0.113.0/24\n0\n0\n"
     out = _run_menu(script, store)
     assert "Added 203.0.113.0/24" in out
 
@@ -77,17 +87,20 @@ def test_menu_history_view(tmp_path, monkeypatch):
         "scan_hosts",
         _fake_scan_hosts(lambda h: ProbeResult(h, sent=4, received=4, avg_ms=15.0)),
     )
+    from gaming.interactive import ranges
+
+    ranges.save_discovered("iran_datacenter", ["185.51.200.0/22"])
     store = HistoryStore(tmp_path / "h.db")
-    # scan, then open history, view scan #1, then exit.
-    out = _run_menu("1\n4\n1\n0\n", store)
+    # scan saved (Iran/DC), then open history(4), view scan #1, then exit.
+    out = _run_menu("1\n1\n1\n4\n1\n0\n", store)
     assert "WHEN (UTC)" in out  # history table header
     assert "HOST" in out  # detail table header
 
 
 def test_menu_settings_edit_and_save(tmp_path):
     store = HistoryStore(tmp_path / "h.db")
-    # 6) settings -> 5) probes per host -> 6 -> s) save -> 0) back -> 0) exit
-    script = "6\n5\n6\ns\n0\n0\n"
+    # 5) settings -> 5) probes per host -> 6 -> s) save -> 0) back -> 0) exit
+    script = "5\n5\n6\ns\n0\n0\n"
     out = _run_menu(script, store)
     assert "Settings saved." in out
 
@@ -168,8 +181,8 @@ def test_menu_filter_by_first_octet_flow(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline, "process", lambda recs, *a, **k: list(recs))
 
     store = HistoryStore(tmp_path / "h.db")
-    # 8) filter -> octets "185" -> 1) all datacenters -> blank country -> 0) exit
-    out = _run_menu("8\n185\n1\n\n0\n", store)
+    # 7) filter -> octets "185" -> 1) all datacenters -> blank country -> 0) exit
+    out = _run_menu("7\n185\n1\n\n0\n", store)
     assert "first octet [185]" in out
     # Neither record has datacenter-ish org text, so "all datacenters" yields none.
     assert "(none)" in out
@@ -200,7 +213,7 @@ def test_menu_filter_by_first_octet_all_datacenters(tmp_path, monkeypatch):
 
     store = HistoryStore(tmp_path / "h.db")
     # octets "185" -> 1) all datacenters -> blank country
-    out = _run_menu("8\n185\n1\n\n0\n", store)
+    out = _run_menu("7\n185\n1\n\n0\n", store)
     assert "all datacenters" in out
     # Only the datacenter/hosting/cloud org with first octet 185 survives.
     assert "185.51.200.0/22" in out
@@ -243,7 +256,7 @@ def test_menu_filter_by_first_octet_specific_provider(tmp_path, monkeypatch):
 
     store = HistoryStore(tmp_path / "h.db")
     # octets "185" -> 2) specific -> "arvan" -> blank country
-    out = _run_menu("8\n185\n2\narvan\n\n0\n", store)
+    out = _run_menu("7\n185\n2\narvan\n\n0\n", store)
     assert isinstance(seen["filters"], Filters)
     assert seen["filters"].providers == ["arvan"]
     assert "provider/org ~ 'arvan'" in out
@@ -272,7 +285,7 @@ def test_menu_filter_autoscan_strict_reachability(tmp_path, monkeypatch):
     monkeypatch.setattr(scanner, "scan_hosts", _fake_scan_hosts(_probe))
 
     store = HistoryStore(tmp_path / "h.db")
-    out = _run_menu("8\n185\n1\n\n0\n", store)
+    out = _run_menu("7\n185\n1\n\n0\n", store)
     assert "185.1.1.1" in out  # GOOD host qualifies
     # The BAD host must not appear in the qualifying list.
     qualifying_section = out.split("meet both strict reachability", 1)[-1]
@@ -299,7 +312,7 @@ def test_menu_filter_autoscan_location_requirement(tmp_path, monkeypatch):
     monkeypatch.setattr(scanner, "scan_hosts", _fake_scan_hosts(_probe))
 
     store = HistoryStore(tmp_path / "h.db")
-    out = _run_menu("8\n185\n1\n\n0\n", store)
+    out = _run_menu("7\n185\n1\n\n0\n", store)
     assert "location requirement" in out
     assert "Excluding 1 record(s) with no known location" in out
     # The country-less host was never probed.
@@ -309,21 +322,21 @@ def test_menu_filter_autoscan_location_requirement(tmp_path, monkeypatch):
 
 def test_menu_filter_by_first_octet_specific_blank_name(tmp_path):
     store = HistoryStore(tmp_path / "h.db")
-    # 8) filter -> octets "10" -> 2) specific -> blank name -> exit
-    out = _run_menu("8\n10\n2\n\n0\n", store)
+    # 7) filter -> octets "10" -> 2) specific -> blank name -> exit
+    out = _run_menu("7\n10\n2\n\n0\n", store)
     assert "No name provided" in out
 
 
 def test_menu_filter_by_first_octet_bad_dc_choice(tmp_path):
     store = HistoryStore(tmp_path / "h.db")
-    # 8) filter -> octets "10" -> 9 (invalid dc choice) -> exit
-    out = _run_menu("8\n10\n9\n0\n", store)
+    # 7) filter -> octets "10" -> 9 (invalid dc choice) -> exit
+    out = _run_menu("7\n10\n9\n0\n", store)
     assert "Please choose 1 or 2" in out
 
 
 def test_menu_filter_by_first_octet_invalid_input(tmp_path):
     store = HistoryStore(tmp_path / "h.db")
-    out = _run_menu("8\n999\n0\n", store)
+    out = _run_menu("7\n999\n0\n", store)
     assert "Invalid input" in out
 
 
@@ -349,30 +362,20 @@ def test_format_bare_ips_empty():
 def test_menu_lists_new_scan_and_update_options(tmp_path):
     store = HistoryStore(tmp_path / "h.db")
     out = _run_menu("0\n", store)
-    assert "Scan Datacenters" in out
-    assert "Scan Foreign CDN/Cloud Providers" in out
-    assert "Scan Iranian CDN Providers" in out
+    assert "Scan saved ranges" in out
+    assert "Discover & save provider ranges" in out
+    assert "Manage IP ranges" in out
     assert "Update installed version" in out
 
 
-def _category_records():
-    from gaming.models import IPRecord
-
-    return [
-        IPRecord(prefix="1.1.1.0/24", source="t", country="US",
-                 organization="Cloudflare, Inc.", provider="cloudflare"),
-        IPRecord(prefix="5.5.5.0/24", source="t", country="DE",
-                 organization="Hetzner Online Hosting", provider="hetzner"),
-        IPRecord(prefix="185.51.200.0/22", source="t", country="IR",
-                 organization="ArvanCloud CDN", provider="arvancloud"),
-    ]
+def test_menu_banner_renders(tmp_path):
+    store = HistoryStore(tmp_path / "h.db")
+    out = _run_menu("0\n", store)
+    # The devprogrmer wordmark banner appears at the top (ASCII art, SSH-safe).
+    assert "devprogrmer" in out
 
 
-def _patch_pipeline(monkeypatch, records):
-    from gaming import pipeline
-
-    monkeypatch.setattr(pipeline, "discover", lambda *a, **k: list(records))
-    monkeypatch.setattr(pipeline, "process", lambda recs, *a, **k: list(recs))
+def _patch_scan(monkeypatch):
     monkeypatch.setattr(
         scanner,
         "scan_hosts",
@@ -380,66 +383,92 @@ def _patch_pipeline(monkeypatch, records):
     )
 
 
-def test_menu_datacenter_scan_excludes_cdns(tmp_path, monkeypatch):
-    _patch_pipeline(monkeypatch, _category_records())
+def test_menu_discover_saves_all_categories(tmp_path, monkeypatch):
+    """Discover & save persists CIDRs across every category, from seed data."""
+    from gaming.interactive import ranges
+
+    # No live pipeline needed — bundled seed data alone must aggregate many
+    # providers across all four categories.
     store = HistoryStore(tmp_path / "h.db")
-    # 9) Scan Datacenters -> region 4 (All) -> exit
-    out = _run_menu("9\n4\n0\n", store)
-    assert "[Datacenter]" in out
-    # Hetzner (real DC) is in; Cloudflare and ArvanCloud CDN are excluded.
-    assert "5.5.5.0/24" in out
-    assert "1.1.1.0/24" not in out
-    assert "185.51.200.0/22" not in out
-    assert "Alive IPs (copy-paste ready)" in out
+    out = _run_menu("2\n0\n", store)
+    assert "Saved" in out and "into Manage IP Ranges" in out
+    # Every category gained entries (not just one provider).
+    for category in ranges.CATEGORIES:
+        assert len(ranges.load_category(category)) > 0, category
+    # Iranian CDN aggregates MORE than one provider CIDR.
+    assert len(ranges.load_category("iran_cdn")) > 1
 
 
-def test_menu_foreign_cdn_scan_includes_cdns(tmp_path, monkeypatch):
-    _patch_pipeline(monkeypatch, _category_records())
+def test_menu_discovered_ranges_persist_across_instances(tmp_path, monkeypatch):
+    """Discovered CIDRs survive after the menu exits (not RAM-only)."""
+    from gaming.interactive import ranges
+
     store = HistoryStore(tmp_path / "h.db")
-    # 10) Scan Foreign CDN/Cloud -> region 4 (All) -> exit
-    out = _run_menu("10\n4\n0\n", store)
-    assert "[Foreign CDN/Cloud]" in out
-    assert "1.1.1.0/24" in out  # Cloudflare included
-    assert "5.5.5.0/24" not in out  # Hetzner (plain DC) excluded
+    _run_menu("2\n0\n", store)  # discover & save, then exit
+    before = {c: ranges.load_category(c) for c in ranges.CATEGORIES}
+
+    # A brand-new Menu instance (fresh process simulation) still sees them via
+    # Manage IP ranges -> list by category.
+    out = _run_menu("3\n1\n0\n0\n", store)
+    assert "iran_cdn" in out
+    assert any(cidr in out for cidr in before["iran_cdn"])
 
 
-def test_menu_iranian_cdn_scan_is_separate(tmp_path, monkeypatch):
-    _patch_pipeline(monkeypatch, _category_records())
+def test_menu_scan_class_selection_loads_right_category(tmp_path, monkeypatch):
+    """Selecting Foreign + CDN scans only foreign_cdn saved CIDRs."""
+    _patch_scan(monkeypatch)
+    from gaming.interactive import ranges
+
+    ranges.save_discovered(
+        "foreign_cdn", ["1.1.1.0/24"], metadata={"1.1.1.0/24": ("US", "cloudflare")}
+    )
+    ranges.save_discovered(
+        "foreign_datacenter",
+        ["5.5.5.0/24"],
+        metadata={"5.5.5.0/24": ("DE", "hetzner")},
+    )
     store = HistoryStore(tmp_path / "h.db")
-    # 11) Scan Iranian CDN -> region 1 (Middle East) -> exit
-    out = _run_menu("11\n1\n0\n", store)
-    assert "[Iranian CDN]" in out
-    assert "185.51.200.0/22" in out  # ArvanCloud CDN included
-    assert "1.1.1.0/24" not in out  # foreign CDN excluded
-    assert "5.5.5.0/24" not in out  # foreign DC excluded
+    # 1) scan saved -> origin Foreign(2) -> class CDN(2) -> exit
+    out = _run_menu("1\n2\n2\n0\n", store)
+    assert "foreign_cdn" in out
+    assert "1.1.1.1" in out  # the CDN host was scanned
+    # The datacenter CIDR must NOT leak into a CDN-class scan.
+    assert "5.5.5.1" not in out
 
 
-def test_menu_region_selection_filters_cidrs(tmp_path, monkeypatch):
-    from gaming.models import IPRecord
+def test_menu_scan_reports_lowest_latency_country(tmp_path, monkeypatch):
+    """A foreign scan reports which country answers fastest from here."""
+    from gaming.interactive import ranges
 
-    records = [
-        IPRecord(prefix="5.5.5.0/24", source="t", country="DE",
-                 organization="Hetzner Hosting", provider="hetzner"),
-        IPRecord(prefix="45.45.45.0/24", source="t", country="SG",
-                 organization="Acme Hosting", provider="acme"),
-    ]
-    _patch_pipeline(monkeypatch, records)
+    ranges.save_discovered(
+        "foreign_datacenter",
+        ["5.5.5.0/24"],
+        metadata={"5.5.5.0/24": ("DE", "hetzner")},
+    )
+    ranges.save_discovered(
+        "foreign_datacenter",
+        ["9.9.9.0/24"],
+        metadata={"9.9.9.0/24": ("NL", "leaseweb")},
+    )
+
+    # DE answers fast (20ms), NL slow (200ms) -> DE should be reported best.
+    def _probe(host):
+        if host.startswith("5.5.5"):
+            return ProbeResult(host, sent=4, received=4, avg_ms=20.0)
+        return ProbeResult(host, sent=4, received=4, avg_ms=200.0)
+
+    monkeypatch.setattr(scanner, "scan_hosts", _fake_scan_hosts(_probe))
     store = HistoryStore(tmp_path / "h.db")
-    # 9) Datacenter -> region 2 (Europe): only the DE record should match.
-    out = _run_menu("9\n2\n0\n", store)
-    assert "5.5.5.0/24" in out
-    assert "45.45.45.0/24" not in out
+    out = _run_menu("1\n2\n1\n0\n", store)
+    assert "Latency by destination country" in out
+    assert "Lowest latency from here: DE" in out
 
 
-def test_menu_iranian_cdn_no_match_friendly(tmp_path, monkeypatch):
-    from gaming.models import IPRecord
-
-    # Only foreign records — Iranian CDN scan should find nothing.
-    records = [
-        IPRecord(prefix="1.1.1.0/24", source="t", country="US",
-                 organization="Cloudflare", provider="cloudflare"),
-    ]
-    _patch_pipeline(monkeypatch, records)
+def test_menu_manage_add_remove_by_category(tmp_path):
     store = HistoryStore(tmp_path / "h.db")
-    out = _run_menu("11\n1\n0\n", store)
-    assert "(none)" in out
+    # manage(3) -> add(4) -> group iran_cdn -> CIDR -> back(0) -> exit(0)
+    out = _run_menu("3\n4\niran_cdn\n203.0.113.0/24\n0\n0\n", store)
+    assert "Added 203.0.113.0/24 to iran_cdn" in out
+    from gaming.interactive import ranges
+
+    assert "203.0.113.0/24" in ranges.custom_ranges("iran_cdn")

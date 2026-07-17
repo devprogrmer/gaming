@@ -9,12 +9,19 @@ A live progress callback is invoked as each host completes so the caller can
 drive a progress bar. The heavy lifting (concurrent probing) lives in
 :mod:`.pinger`; this module adds the alive-discovery fast path and result
 assembly.
+
+**Iran-origin measurement.** Latency and reachability are measured by the OS
+``ping``/TCP connect on the machine running this tool (see :mod:`.pinger`). When
+deployed on an Iranian server, every RTT is therefore genuinely measured *from
+Iran to the target* — foreign targets are probed Iran→abroad, never via an
+Iran-to-Iran shortcut. :func:`summarize_by_group` uses those real measurements
+to report which destination country/provider group answers fastest from here.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..logging_setup import get_logger
 from . import ranges as ranges_mod
@@ -44,6 +51,80 @@ class ScanReport:
     def alive_hosts(self) -> list[str]:
         """Hosts that responded to at least one probe."""
         return [p.host for p, _v in self.results if p.reachable]
+
+
+@dataclass(slots=True)
+class GroupLatency:
+    """Aggregated latency for one destination grouping (country or provider)."""
+
+    key: str
+    live: int = 0
+    total: int = 0
+    _samples: list[float] = field(default_factory=list)
+
+    def add(self, avg_ms: float | None, *, reachable: bool) -> None:
+        self.total += 1
+        if reachable:
+            self.live += 1
+            if avg_ms is not None:
+                self._samples.append(avg_ms)
+
+    @property
+    def avg_ms(self) -> float | None:
+        if not self._samples:
+            return None
+        return sum(self._samples) / len(self._samples)
+
+
+def summarize_by_group(
+    results: list[tuple[ProbeResult, str]],
+    host_to_record: dict[str, object],
+    *,
+    by: str = "country",
+) -> list[GroupLatency]:
+    """Bucket probe results by destination country (or provider) and average RTT.
+
+    Only reachable probes contribute to the latency average, so the returned
+    groups answer "which destination grouping is fastest **from the Iranian
+    server running this scan**." Groups are sorted best-first: live groups with
+    a known average latency ascending, then groups with no measurable latency.
+
+    Args:
+        results: ``(ProbeResult, verdict)`` pairs from a completed scan.
+        host_to_record: maps a probe host back to its discovered record (used to
+            read ``country``/``provider``/``organization``).
+        by: ``"country"`` (default) or ``"provider"`` — the grouping attribute.
+
+    Returns:
+        A list of :class:`GroupLatency`, best (lowest) average latency first.
+    """
+    groups: dict[str, GroupLatency] = {}
+    for probe, _verdict in results:
+        rec = host_to_record.get(probe.host)
+        key = _group_key(rec, by)
+        group = groups.get(key)
+        if group is None:
+            group = groups[key] = GroupLatency(key=key)
+        group.add(probe.avg_ms, reachable=probe.reachable)
+
+    def _sort_key(g: GroupLatency) -> tuple[int, float]:
+        # Measurable groups first (0), sorted by ascending latency; the rest last.
+        if g.avg_ms is None:
+            return (1, float("inf"))
+        return (0, g.avg_ms)
+
+    return sorted(groups.values(), key=_sort_key)
+
+
+def _group_key(rec: object, by: str) -> str:
+    if rec is None:
+        return "unknown"
+    if by == "provider":
+        value = getattr(rec, "provider", None) or getattr(rec, "organization", None)
+    else:
+        value = getattr(rec, "country", None)
+    text = (value or "").strip()
+    return text or "unknown"
 
 
 ProgressHook = Callable[[ProbeResult, str], None]
@@ -137,8 +218,10 @@ def persist(report: ScanReport, store: HistoryStore | None = None) -> int:
 
 __all__ = [
     "ScanReport",
+    "GroupLatency",
     "run_scan",
     "discover_alive",
+    "summarize_by_group",
     "persist",
     "ping_host",
 ]

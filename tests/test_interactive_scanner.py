@@ -107,3 +107,45 @@ def _fake_scan_hosts(probe_fn):
         return results
 
     return _impl
+
+
+# ---- lowest-latency grouping (Iran-origin reporting) ---------------------
+def _rec(country=None, provider=None):
+    from gaming.models import IPRecord
+
+    return IPRecord(prefix="1.2.3.0/24", country=country, provider=provider)
+
+
+def test_summarize_by_group_picks_lowest_latency_country():
+    from gaming.interactive.classify import BAD
+
+    h2r = {
+        "1.1.1.1": _rec("DE", "hetzner"),
+        "2.2.2.2": _rec("NL", "leaseweb"),
+        "3.3.3.3": _rec("DE", "hetzner"),
+    }
+    results = [
+        (ProbeResult("1.1.1.1", sent=4, received=4, avg_ms=40.0), GOOD),
+        (ProbeResult("2.2.2.2", sent=4, received=4, avg_ms=120.0), GOOD),
+        (ProbeResult("3.3.3.3", sent=4, received=0), BAD),
+    ]
+    groups = scanner.summarize_by_group(results, h2r)
+    # DE (40ms live) sorts ahead of NL (120ms).
+    assert groups[0].key == "DE"
+    assert groups[0].avg_ms == 40.0
+    assert groups[0].live == 1
+    assert groups[0].total == 2
+
+
+def test_summarize_by_group_unknown_bucket():
+    results = [(ProbeResult("9.9.9.9", sent=4, received=0), "BAD")]
+    groups = scanner.summarize_by_group(results, {})
+    assert groups[0].key == "unknown"
+    assert groups[0].avg_ms is None
+
+
+def test_summarize_by_group_by_provider():
+    h2r = {"1.1.1.1": _rec("US", "cloudflare")}
+    results = [(ProbeResult("1.1.1.1", sent=4, received=4, avg_ms=10.0), GOOD)]
+    groups = scanner.summarize_by_group(results, h2r, by="provider")
+    assert groups[0].key == "cloudflare"

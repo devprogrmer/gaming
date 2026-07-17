@@ -25,7 +25,7 @@ from . import ranges as ranges_mod
 from . import report as report_mod
 from . import scanner
 from .classify import GOOD
-from .progress import ProgressBar
+from .progress import ProgressBar, _supports_color
 from .settings import Settings, load_settings, save_settings
 from .storage import HistoryStore
 
@@ -95,40 +95,60 @@ def format_bare_ips(hosts: Iterable[str]) -> str:
     return "\n".join(out)
 
 
-# Category scan definitions: key -> (menu label, predicate name in
-# gaming.processing.filters). The predicate enforces the separation between
-# datacenter-only, foreign-CDN, and Iranian-CDN targets in the actual filtering
-# step (not just the displayed label).
-_CATEGORY_LABELS = {
-    "datacenter": "Datacenter",
-    "foreign_cdn": "Foreign CDN/Cloud",
-    "iran_cdn": "Iranian CDN",
-}
+# Origin (Iran vs foreign) and class (datacenter vs cdn) map onto the four
+# storage categories in gaming.interactive.ranges.
+_ORIGIN_LABELS = {"iran": "Iran", "foreign": "Foreign"}
+_CLASS_LABELS = {"datacenter": "Datacenter", "cdn": "CDN / Cloud"}
 
-_REGION_LABELS = {
-    "middle_east": "Middle East",
-    "europe": "Europe",
-    "asia": "Asia",
-    "all": "All supported regions",
-}
+
+def _categories_for(origin: str, cls: str) -> list[str]:
+    """Resolve an (origin, class) selection to storage category keys."""
+    classes = ("datacenter", "cdn") if cls == "both" else (cls,)
+    origins = ("iran", "foreign") if origin == "both" else (origin,)
+    return [f"{o}_{c}" for o in origins for c in classes]
+
+
+_BANNER = r"""
+      _
+   __| | _____   ___ __  _ __ ___   __ _ _ __ ___  ___ _ __
+  / _` |/ _ \ \ / / '_ \| '__/ _ \ / _` | '__/ _ \/ _ \ '__|
+ | (_| |  __/\ V /| |_) | | | (_) | (_| | | |  __/  __/ |
+  \__,_|\___| \_/ | .__/|_|  \___/ \__, |_|  \___|\___|_|
+                  |_|              |___/
+"""
+
+
+def render_banner(stream: TextIO | None = None) -> str:
+    """Return the ``devprogrmer`` banner, coloured on a capable TTY.
+
+    Falls back to plain ASCII (no escape codes) when the stream is not an
+    ANSI-capable TTY, so it stays clean over SSH, in pipes, and in CI.
+    """
+    stream = stream or sys.stdout
+    art = _BANNER.rstrip("\n")
+    if _supports_color(stream):
+        return f"\033[36m{art}\033[0m"
+    return art
+
+
+def _hr(width: int = 52) -> str:
+    return "-" * width
+
 
 _MENU = """
+{banner}
 ==================================================
-  gaming — IP Health Scanner  (v{version})
+   devprogrmer * IP Health Scanner   (v{version})
 ==================================================
-  1) Scan Iranian IP ranges
-  2) Scan foreign IP ranges
-  3) Discover alive IPs (quick sweep)
+  1) Scan saved ranges (datacenter / CDN / both)
+  2) Discover & save provider ranges
+  3) Manage IP ranges
   4) View scan history
-  5) Manage IP ranges
-  6) Settings
-  7) Update installed version
-  8) Filter CIDRs by first octet
-  9) Scan Datacenters
- 10) Scan Foreign CDN/Cloud Providers
- 11) Scan Iranian CDN Providers
+  5) Settings
+  6) Update installed version
+  7) Filter CIDRs by first octet
   0) Exit
---------------------------------------------------"""
+{rule}"""
 
 
 class Menu:
@@ -162,8 +182,13 @@ class Menu:
     # ---- main loop -------------------------------------------------------
     def run(self) -> int:
         self.store.initialize()
+        first = True
         while True:
-            self._print(_MENU.format(version=__version__))
+            banner = render_banner(self.stdout) if first else ""
+            first = False
+            self._print(
+                _MENU.format(banner=banner, version=__version__, rule=_hr())
+            )
             try:
                 choice = self._prompt("Select an option: ")
             except EOFError:
@@ -172,27 +197,19 @@ class Menu:
 
             try:
                 if choice == "1":
-                    self._scan("iran")
+                    self._scan_saved()
                 elif choice == "2":
-                    self._scan("foreign")
+                    self._discover_and_save()
                 elif choice == "3":
-                    self._discover_alive()
+                    self._manage_ranges()
                 elif choice == "4":
                     self._history()
                 elif choice == "5":
-                    self._manage_ranges()
-                elif choice == "6":
                     self._settings()
-                elif choice == "7":
+                elif choice == "6":
                     self._update_installed_version()
-                elif choice == "8":
+                elif choice == "7":
                     self._filter_by_first_octet()
-                elif choice == "9":
-                    self._scan_category("datacenter")
-                elif choice == "10":
-                    self._scan_category("foreign_cdn")
-                elif choice == "11":
-                    self._scan_category("iran_cdn")
                 elif choice in ("0", "q", "quit", "exit"):
                     self._print("Goodbye.")
                     return 0
@@ -205,75 +222,190 @@ class Menu:
                 self._print("\nCancelled.")
 
     # ---- actions ---------------------------------------------------------
-    def _scan(self, scope: str) -> None:
-        cidrs = ranges_mod.load_ranges(scope)
+    def _choose(self, title: str, options: list[tuple[str, str]]) -> str | None:
+        """Render a titled numbered menu; return the chosen key or None."""
+        self._print(f"\n{title}")
+        for i, (_key, label) in enumerate(options, start=1):
+            self._print(f"  {i}) {label}")
+        raw = self._prompt("Choice: ").strip()
+        if not raw.isdigit() or not (1 <= int(raw) <= len(options)):
+            self._print("Unknown option.")
+            return None
+        return options[int(raw) - 1][0]
+
+    def _scan_saved(self) -> None:
+        """Ask which class/origin to scan, then scan the saved category ranges.
+
+        Implements the "ask what to scan, then load the correct saved CIDRs"
+        flow: the user picks an origin (Iran / Foreign / Both) and a class
+        (Datacenter / CDN-Cloud / Both); those resolve to storage categories,
+        and the CIDRs previously saved under them (via discovery or manual add)
+        are loaded from Manage IP Ranges and scanned. Nothing is re-entered by
+        hand and nothing is re-discovered here.
+        """
+        origin = self._choose(
+            "Which origin?",
+            [("iran", "Iran"), ("foreign", "Foreign"), ("both", "Both")],
+        )
+        if origin is None:
+            return
+        cls = self._choose(
+            "Which CIDR class?",
+            [
+                ("datacenter", "Datacenter CIDRs"),
+                ("cdn", "CDN / Cloud CIDRs"),
+                ("both", "Both"),
+            ],
+        )
+        if cls is None:
+            return
+
+        categories = _categories_for(origin, cls)
+        # Load saved CIDRs for the selected categories, remembering each CIDR's
+        # metadata so results can be grouped by country later.
+        entries: list[ranges_mod.RangeEntry] = []
+        for category in categories:
+            entries.extend(ranges_mod.category_entries(category))
+        if not entries:
+            self._print(
+                "\nNo saved CIDRs for that selection yet. Run "
+                "'Discover & save provider ranges' first."
+            )
+            return
+
         hosts = ranges_mod.expand_hosts(
-            cidrs,
+            [e.cidr for e in entries],
             sample_per_range=self.settings.sample_per_range,
             max_hosts=self.settings.max_hosts,
         )
         if not hosts:
-            self._print(
-                f"No {scope} ranges configured. Add some from 'Manage IP ranges'."
-            )
+            self._print("Selected ranges expanded to no scannable hosts.")
             return
 
+
+
+        cat_label = ", ".join(categories)
         self._print(
-            f"\nScanning {len(hosts)} host(s) from {len(cidrs)} {scope} range(s) "
-            f"({self.settings.ping_count} probe(s) each)...\n"
+            f"\nScanning {len(hosts)} host(s) from {len(entries)} saved "
+            f"CIDR(s) [{cat_label}] ({self.settings.ping_count} probe(s) each)...\n"
         )
-        bar = ProgressBar(len(hosts), stream=self.stdout, label=f"{scope.title()} scan")
+        # Map probe host -> the source CIDR's metadata for latency grouping.
+        host_to_record = self._map_hosts_to_entries(hosts, entries)
+
+        bar = ProgressBar(len(hosts), stream=self.stdout, label="Scan")
 
         def _hook(_probe, verdict: str) -> None:
             bar.update(verdict)
 
+        scope = categories[0] if len(categories) == 1 else origin
         report = scanner.run_scan(scope, self.settings, on_result=_hook, hosts=hosts)
         bar.finish()
 
         scan_id = scanner.persist(report, self.store)
+        self._render_scan_results(report, host_to_record, scan_id, origin=origin)
+
+    def _map_hosts_to_entries(
+        self, hosts: list[str], entries: list[ranges_mod.RangeEntry]
+    ) -> dict[str, object]:
+        """Map each probe host back to the entry (metadata) of its CIDR."""
+        import ipaddress as _ip
+
+        nets = []
+        for e in entries:
+            try:
+                nets.append((_ip.ip_network(e.cidr, strict=False), e))
+            except ValueError:
+                continue
+        mapping: dict[str, object] = {}
+        for host in hosts:
+            try:
+                addr = _ip.ip_address(host)
+            except ValueError:
+                continue
+            for net, entry in nets:
+                if addr in net:
+                    mapping[host] = entry
+                    break
+        return mapping
+
+    def _render_scan_results(
+        self, report, host_to_record: dict[str, object], scan_id: int, *, origin: str
+    ) -> None:
+        """Print the summary, lowest-latency grouping, and clean bare-IP block."""
         self._print("")
-        self._print(report_mod.render_report(report, stream=self.stdout))
         self._print(
             report_mod.summary_line(report.counts, report.total, stream=self.stdout)
         )
-        self._print(f"Saved as scan #{scan_id}. Use 'View scan history' to revisit it.")
 
-    def _discover_alive(self) -> None:
-        scope = self._prompt("Scope to sweep [iran/foreign] (default iran): ").lower()
-        if scope not in ranges_mod.SCOPES:
-            scope = "iran"
-        cidrs = ranges_mod.load_ranges(scope)
-        hosts = ranges_mod.expand_hosts(
-            cidrs,
-            sample_per_range=self.settings.sample_per_range,
-            max_hosts=self.settings.max_hosts,
+        live = [(p, v) for p, v in report.results if p.reachable]
+        if live:
+            groups = scanner.summarize_by_group(report.results, host_to_record)
+            self._print("\n" + _hr())
+            self._print("Latency by destination country (from this server):")
+            self._print(report_mod.render_group_latency(groups))
+
+        self._print(_hr())
+        self._print("Alive IPs (copy-paste ready):")
+        if live:
+            self._print(format_bare_ips(p.host for p, _v in live))
+            self._print("\nWith metadata:")
+            for probe, _v in live:
+                rec = host_to_record.get(probe.host)
+                country = getattr(rec, "country", None) or "?"
+                provider = getattr(rec, "provider", None) or "?"
+                latency = f"{probe.avg_ms:.0f}ms" if probe.avg_ms is not None else "?"
+                self._print(f"  {probe.host}  [{country}]  {provider}  {latency}")
+        else:
+            self._print("(no live IPs found)")
+        self._print(
+            f"\nSaved as scan #{scan_id}. Use 'View scan history' to revisit it."
         )
-        if not hosts:
-            self._print(f"No {scope} ranges configured.")
-            return
 
-        self._print(f"\nSweeping {len(hosts)} host(s) for signs of life...\n")
-        bar = ProgressBar(len(hosts), stream=self.stdout, label="Alive sweep")
+    def _discover_and_save(self) -> None:
+        """Discover CIDRs across many providers and auto-save them by category.
 
-        def _hook(probe) -> None:
-            bar.update("GOOD" if probe.reachable else "BAD")
+        Aggregates the bundled provider seed data (broad, deterministic coverage
+        across datacenter/hosting/cloud/CDN for Iran and foreign) together with
+        live/offline pipeline discovery, classifies every record, and persists
+        the CIDRs into Manage IP Ranges. This is what fixes the old one-shot
+        "Iranian CDN" flow that returned a single provider: it now saves ALL
+        matching providers' CIDRs, durably.
+        """
+        from .. import pipeline
+        from ..config import load_config
+        from . import providers as providers_mod
 
-        alive = scanner.discover_alive(scope, self.settings, on_result=_hook, hosts=hosts)
-        bar.finish()
+        self._print("\nDiscovering provider ranges (seed data + sources)...")
+        records = list(providers_mod.load_seed_records())
+        try:
+            config = load_config()
+            raw = pipeline.discover(config)
+            records.extend(pipeline.process(raw, config.to_filters()))
+        except Exception as exc:  # noqa: BLE001 - discovery must never crash the menu
+            self._print(f"  (live discovery unavailable: {exc})")
 
-        self._print("")
-        if not alive:
-            self._print("No alive hosts found in the sampled ranges.")
-            return
-        self._print(f"Found {len(alive)} alive host(s):")
-        for host in alive:
-            self._print(f"  {host}")
-
-        answer = self._prompt(
-            "\nRun a full health scan on these alive hosts now? [y/N]: "
-        ).lower()
-        if answer in ("y", "yes"):
-            self._full_scan_hosts(scope, alive)
+        added = ranges_mod.persist_records(records)
+        total = sum(added.values())
+        self._print(f"\n{_hr()}")
+        if not total:
+            self._print(
+                "No new CIDRs to save — everything discovered is already stored."
+            )
+        else:
+            self._print(f"Saved {total} new CIDR(s) into Manage IP Ranges:")
+            for category in ranges_mod.CATEGORIES:
+                if category in added:
+                    self._print(f"  {category:20s} +{added[category]}")
+        # Show the running totals per category so the user sees persistence.
+        self._print("\nStored totals by category:")
+        for category in ranges_mod.CATEGORIES:
+            self._print(
+                f"  {category:20s} {len(ranges_mod.load_category(category))}"
+            )
+        self._print(
+            "\nThese persist across restarts — scan them any time from "
+            "'Scan saved ranges'."
+        )
 
     def _full_scan_hosts(self, scope: str, hosts: list[str]) -> None:
         self._print(f"\nRunning a full health scan on {len(hosts)} alive host(s)...\n")
@@ -321,64 +453,91 @@ class Menu:
         while True:
             self._print(
                 "\nManage IP ranges\n"
-                "  1) List Iranian ranges\n"
-                "  2) List foreign ranges\n"
-                "  3) Add a custom range\n"
-                "  4) Remove a custom range\n"
+                "  1) List ranges by category\n"
+                "  2) List Iranian ranges (all)\n"
+                "  3) List foreign ranges (all)\n"
+                "  4) Add a custom range\n"
+                "  5) Remove a custom range\n"
                 "  0) Back"
             )
             choice = self._prompt("Select: ")
             if choice == "1":
-                self._list_ranges("iran")
+                self._list_categories()
             elif choice == "2":
-                self._list_ranges("foreign")
+                self._list_ranges("iran")
             elif choice == "3":
-                self._add_range()
+                self._list_ranges("foreign")
             elif choice == "4":
+                self._add_range()
+            elif choice == "5":
                 self._remove_range()
             elif choice in ("0", ""):
                 return
             else:
                 self._print("Unknown option.")
 
+    def _list_categories(self) -> None:
+        """Show saved CIDRs grouped by the four categories, with origin tags."""
+        for category in ranges_mod.CATEGORIES:
+            entries = ranges_mod.category_entries(category)
+            self._print(f"\n{category} ({len(entries)}):")
+            if not entries:
+                self._print("  (none)")
+                continue
+            for e in entries:
+                origin_tag = "[discovered]" if e.origin == "discovered" else "[custom]"
+                meta = f" {e.country or '?'} / {e.provider or '?'}"
+                self._print(f"  {e.cidr:<20} {origin_tag}{meta}")
+
     def _list_ranges(self, scope: str) -> None:
         all_ranges = ranges_mod.load_ranges(scope)
         custom = set(ranges_mod.custom_ranges(scope))
+        # A scope also aggregates its two categories.
+        for category in ranges_mod._SCOPE_CATEGORIES[scope]:
+            custom |= set(ranges_mod.custom_ranges(category))
         self._print(f"\n{scope.title()} ranges ({len(all_ranges)} total):")
         for cidr in all_ranges:
-            tag = " [custom]" if cidr in custom else ""
+            tag = " [saved]" if cidr in custom else ""
             self._print(f"  {cidr}{tag}")
 
+    def _group_prompt(self) -> str | None:
+        """Prompt for a scope or category name for add/remove."""
+        groups = (*ranges_mod.SCOPES, *ranges_mod.CATEGORIES)
+        self._print("\nGroups: " + ", ".join(groups))
+        group = self._prompt("Group: ").strip().lower()
+        if group not in groups:
+            self._print(f"Group must be one of: {', '.join(groups)}.")
+            return None
+        return group
+
     def _add_range(self) -> None:
-        scope = self._prompt("Scope [iran/foreign]: ").lower()
-        if scope not in ranges_mod.SCOPES:
-            self._print("Scope must be 'iran' or 'foreign'.")
+        group = self._group_prompt()
+        if group is None:
             return
         cidr = self._prompt("CIDR to add (e.g. 185.51.200.0/22): ")
         try:
-            normalized = ranges_mod.add_custom_range(scope, cidr)
+            normalized = ranges_mod.add_custom_range(group, cidr)
         except ValueError as exc:
             self._print(f"Could not add range: {exc}")
             return
-        self._print(f"Added {normalized} to {scope} ranges.")
+        self._print(f"Added {normalized} to {group} ranges.")
 
     def _remove_range(self) -> None:
-        scope = self._prompt("Scope [iran/foreign]: ").lower()
-        if scope not in ranges_mod.SCOPES:
-            self._print("Scope must be 'iran' or 'foreign'.")
+        group = self._group_prompt()
+        if group is None:
             return
-        custom = ranges_mod.custom_ranges(scope)
+        custom = ranges_mod.custom_ranges(group)
         if not custom:
-            self._print(f"No custom {scope} ranges to remove.")
+            self._print(f"No custom/discovered {group} ranges to remove.")
             return
-        self._print(f"Custom {scope} ranges:")
+        self._print(f"Saved {group} ranges:")
         for cidr in custom:
             self._print(f"  {cidr}")
         cidr = self._prompt("CIDR to remove: ")
-        if ranges_mod.remove_custom_range(scope, cidr):
+        if ranges_mod.remove_custom_range(group, cidr):
             self._print(f"Removed {cidr}.")
         else:
-            self._print("That range was not found among custom ranges.")
+            self._print("That range was not found among saved ranges.")
 
     def _settings(self) -> None:
         fields = [
@@ -427,93 +586,6 @@ class Menu:
         setattr(self.settings, attr, value)
         self.settings = self.settings.clamped()
         self._print(f"Set {label} to {getattr(self.settings, attr)}.")
-
-    def _select_region(self) -> str | None:
-        """Prompt for a scan region. Returns a region key or None if cancelled."""
-        choice = self._prompt(
-            "\nSelect region:\n"
-            "  1) Middle East\n"
-            "  2) Europe\n"
-            "  3) Asia\n"
-            "  4) All supported regions\n"
-            "Choice (default 4): "
-        ).strip()
-        mapping = {"1": "middle_east", "2": "europe", "3": "asia", "4": "all"}
-        if choice == "":
-            return "all"
-        region = mapping.get(choice)
-        if region is None:
-            self._print("Unknown region option.")
-        return region
-
-    def _scan_category(self, category: str) -> None:
-        """Discover, filter to a single category + region, then scan.
-
-        The three categories are mutually exclusive by construction — each uses
-        its own predicate from :mod:`gaming.processing.filters`:
-
-        * ``datacenter``   → :func:`is_datacenter_only` (excludes CDN/cloud/edge)
-        * ``foreign_cdn``  → :func:`is_foreign_cdn` (Cloudflare/Fastly/Meta/…)
-        * ``iran_cdn``     → :func:`is_iranian_cdn`
-
-        so a record can never leak from one scan flow into another. A region
-        selection is then applied to narrow which CIDRs reach the scanner.
-        """
-        from ..processing.filters import (
-            is_datacenter_only,
-            is_foreign_cdn,
-            is_iranian_cdn,
-            matches_region,
-        )
-
-        predicates = {
-            "datacenter": is_datacenter_only,
-            "foreign_cdn": is_foreign_cdn,
-            "iran_cdn": is_iranian_cdn,
-        }
-        predicate = predicates[category]
-        label = _CATEGORY_LABELS[category]
-
-        region = self._select_region()
-        if region is None:
-            return
-
-        # Imported lazily so launching the menu doesn't pull in the whole
-        # discovery/reachability stack unless a scan is actually run.
-        from .. import pipeline
-        from ..config import load_config
-        from ..models import Filters
-
-        # Iranian-CDN scans scope discovery to Iran so unrelated foreign records
-        # never enter the flow; the other categories rely on their predicate.
-        countries = ["IR"] if category == "iran_cdn" else []
-        config = load_config()
-        filters = Filters(countries=countries)
-
-        self._print(f"\n[{label}] Discovering IP ranges...")
-        raw = pipeline.discover(config, filters)
-        records = pipeline.process(raw, filters)
-
-        # Enforce category separation in the actual filtering, then the region.
-        matched = [r for r in records if predicate(r)]
-        matched = [r for r in matched if matches_region(r, region)]
-
-        region_label = _REGION_LABELS.get(region, region)
-        self._print(
-            f"\n{len(matched)} of {len(records)} discovered record(s) match "
-            f"{label} in {region_label}:"
-        )
-        if not matched:
-            self._print(
-                "  (none) — no matching CIDRs for this category/region."
-            )
-            return
-        for rec in matched:
-            country_tag = f" [{rec.country}]" if rec.country else ""
-            org_tag = f" — {rec.organization}" if rec.organization else ""
-            self._print(f"  {rec.prefix}{country_tag}{org_tag}")
-
-        self._auto_scan_matched(matched, scope=category)
 
     def _update_installed_version(self) -> None:
         """Upgrade or switch the installation in place from the interactive menu.

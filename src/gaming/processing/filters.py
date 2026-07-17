@@ -95,6 +95,7 @@ _FOREIGN_CDN_HINTS = (
     "level3",
     "level 3",
     "verizon digital",
+    "oracle",
 )
 
 # Iranian CDN / delivery / edge providers. Best-effort: allocation data for
@@ -221,6 +222,29 @@ def matches_region(rec: IPRecord, region: str) -> bool:
     if region == "all":
         return True
     return region_of(rec) == region
+
+
+def classify_category(rec: IPRecord) -> str | None:
+    """Classify a record into one of the four storage categories, or ``None``.
+
+    Returns one of ``iran_cdn``, ``foreign_cdn``, ``iran_datacenter``,
+    ``foreign_datacenter`` — or ``None`` when the record is neither a
+    recognizable CDN nor a datacenter/hosting network.
+
+    CDN classification wins over datacenter so a provider is never counted in
+    both. Origin (Iran vs foreign) is decided by Iranian signals first
+    (country ``IR`` or an Iranian provider hint), then by any non-IR country.
+    """
+    iranian = _is_iran(rec)
+    if is_iranian_cdn(rec):
+        return "iran_cdn"
+    if is_foreign_cdn(rec):
+        # A foreign-CDN hint on an Iranian network still means an edge/CDN
+        # presence; classify by origin so it lands in the Iranian bucket.
+        return "iran_cdn" if iranian else "foreign_cdn"
+    if is_datacenter_only(rec):
+        return "iran_datacenter" if iranian else "foreign_datacenter"
+    return None
 
 
 def _is_iran(rec: IPRecord) -> bool:

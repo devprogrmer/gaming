@@ -6,6 +6,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-17
+
+### Added
+- **Persistent, category-separated range storage.** Discovered CIDRs are now
+  auto-saved into Manage IP Ranges under four categories — `iran_datacenter`,
+  `iran_cdn`, `foreign_datacenter`, `foreign_cdn` — and survive restarts. The
+  custom-ranges file gained an `origin` (`custom`/`discovered`) and
+  `country`/`provider` metadata, with legacy two-field files still parsing.
+- **Discover & save flow** (`persist_records` + bundled `data/providers.toml`
+  seed data) aggregates CIDRs across many datacenter/hosting/cloud/CDN providers
+  (Cloudflare, Fastly, Akamai, Google, AWS, Azure, Meta, OVH, Hetzner,
+  DigitalOcean, Vultr, Oracle + major Iranian providers) for both origins — not
+  a single provider.
+- **Class-aware scan prompt**: choose origin (Iran / Foreign / Both) and class
+  (Datacenter / CDN-Cloud / Both), then scan the matching saved CIDRs. Classes
+  never leak into each other (`classify_category`, `is_datacenter_only`).
+- **Iran-origin latency reporting**: `scanner.summarize_by_group` buckets live
+  probes by destination country/provider and reports which answers fastest from
+  the (Iranian) server. Latency is measured, not geolocated.
+- **`devprogrmer` banner** and a restructured, ANSI-safe menu; clean
+  copy-paste-ready bare-IP output with per-IP category/provider/country lines.
+- Manage IP ranges can list by category with `[discovered]`/`[custom]` tags and
+  add/remove per category.
+
 ## [0.3.0] - 2026-07-17
 
 ### Added

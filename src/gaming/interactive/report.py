@@ -35,6 +35,47 @@ def summary_line(counts: dict[str, int], total: int, stream: TextIO | None = Non
     return f"Total: {total}   " + "   ".join(parts)
 
 
+def render_group_latency(groups: list, *, title: str = "COUNTRY") -> str:
+    """Render per-destination-group latency, lowest (best) first.
+
+    ``groups`` is a list of :class:`gaming.interactive.scanner.GroupLatency`.
+    Because RTTs are measured from the machine running the scan (an Iranian
+    server in production), the top row is the destination grouping that answers
+    fastest *from Iran*. Groups with no measurable latency are listed last as
+    ``-``.
+    """
+    if not groups:
+        return "No live results to group by latency.\n"
+
+    headers = [title, "LIVE", "AVG(ms)"]
+    body = [
+        [
+            g.key,
+            f"{g.live}/{g.total}",
+            _fmt_ms(g.avg_ms),
+        ]
+        for g in groups
+    ]
+    widths = [
+        max(len(headers[i]), *(len(row[i]) for row in body)) for i in range(len(headers))
+    ]
+
+    def fmt(cells: list[str]) -> str:
+        return "  ".join(cells[i].ljust(widths[i]) for i in range(len(cells)))
+
+    lines = [fmt(headers), "  ".join("-" * w for w in widths)]
+    lines.extend(fmt(row) for row in body)
+
+    # Call out the winner explicitly when at least one group has a measurement.
+    best = next((g for g in groups if g.avg_ms is not None), None)
+    if best is not None:
+        lines.append(
+            f"\nLowest latency from here: {best.key} "
+            f"({best.avg_ms:.1f} ms avg over {best.live} live host(s))."
+        )
+    return "\n".join(lines) + "\n"
+
+
 def render_results(
     rows: list[ResultRow],
     *,

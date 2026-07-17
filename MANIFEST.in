@@ -9,6 +9,7 @@ include update.sh
 include update.ps1
 include src/gaming/py.typed
 recursive-include src/gaming/interactive/data *.txt
+recursive-include src/gaming/interactive/data *.toml
 recursive-include tests *.py
 global-exclude __pycache__
 global-exclude *.py[cod]

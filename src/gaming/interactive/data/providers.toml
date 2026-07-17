@@ -1,0 +1,192 @@
+# Bundled provider seed data for discovery.
+#
+# A curated, maintainable snapshot mapping well-known datacenter / hosting /
+# cloud / CDN providers to representative CIDRs, tagged with the storage
+# category they belong to. This gives the discovery flow broad, deterministic
+# coverage offline (and augments live discovery), so a "discover" pass can
+# aggregate MANY real ranges across many providers rather than a handful of
+# samples. It is intentionally not an exhaustive real-time BGP dump — live
+# discovery still adds to it.
+#
+# category is one of: foreign_cdn, foreign_datacenter, iran_cdn, iran_datacenter
+# country is the ISO-3166 alpha-2 code (best-effort; IR for Iranian networks).
+
+# ---------------------------------------------------------------------------
+# Foreign CDN / cloud / edge / WAF platforms
+# ---------------------------------------------------------------------------
+[[provider]]
+name = "Cloudflare"
+category = "foreign_cdn"
+country = "US"
+asns = ["AS13335"]
+cidrs = ["104.16.0.0/13", "172.64.0.0/13", "162.158.0.0/15", "198.41.128.0/17", "141.101.64.0/18"]
+
+[[provider]]
+name = "Fastly"
+category = "foreign_cdn"
+country = "US"
+asns = ["AS54113"]
+cidrs = ["151.101.0.0/16", "199.232.0.0/16", "23.235.32.0/20"]
+
+[[provider]]
+name = "Akamai Technologies"
+category = "foreign_cdn"
+country = "US"
+asns = ["AS20940"]
+cidrs = ["23.32.0.0/11", "23.192.0.0/11", "104.64.0.0/10", "184.24.0.0/13"]
+
+[[provider]]
+name = "Google Cloud / Edge"
+category = "foreign_cdn"
+country = "US"
+asns = ["AS15169"]
+cidrs = ["8.8.4.0/24", "34.96.0.0/12", "35.190.0.0/17", "142.250.0.0/15"]
+
+[[provider]]
+name = "Amazon CloudFront"
+category = "foreign_cdn"
+country = "US"
+asns = ["AS16509"]
+cidrs = ["13.32.0.0/15", "13.224.0.0/14", "52.84.0.0/15", "54.182.0.0/16"]
+
+[[provider]]
+name = "Microsoft Azure Front Door"
+category = "foreign_cdn"
+country = "US"
+asns = ["AS8075"]
+cidrs = ["13.107.42.0/23", "150.171.0.0/16", "204.79.197.0/24"]
+
+[[provider]]
+name = "Meta / Facebook Edge"
+category = "foreign_cdn"
+country = "US"
+asns = ["AS32934"]
+cidrs = ["157.240.0.0/16", "31.13.24.0/21", "129.134.0.0/16"]
+
+[[provider]]
+name = "Oracle Cloud CDN"
+category = "foreign_cdn"
+country = "US"
+asns = ["AS31898"]
+cidrs = ["138.1.0.0/16", "129.146.0.0/16"]
+
+# ---------------------------------------------------------------------------
+# Foreign datacenter / hosting companies (NOT CDN/edge platforms)
+# ---------------------------------------------------------------------------
+[[provider]]
+name = "Hetzner Online Hosting"
+category = "foreign_datacenter"
+country = "DE"
+asns = ["AS24940"]
+cidrs = ["5.9.0.0/16", "88.198.0.0/16", "116.202.0.0/15", "168.119.0.0/16"]
+
+[[provider]]
+name = "OVH Hosting"
+category = "foreign_datacenter"
+country = "FR"
+asns = ["AS16276"]
+cidrs = ["51.68.0.0/16", "51.75.0.0/16", "145.239.0.0/16", "213.32.0.0/17"]
+
+[[provider]]
+name = "DigitalOcean Hosting"
+category = "foreign_datacenter"
+country = "US"
+asns = ["AS14061"]
+cidrs = ["104.131.0.0/16", "159.65.0.0/16", "165.227.0.0/16", "167.71.0.0/16"]
+
+[[provider]]
+name = "Vultr / Choopa Hosting"
+category = "foreign_datacenter"
+country = "US"
+asns = ["AS20473"]
+cidrs = ["45.32.0.0/16", "45.63.0.0/16", "108.61.0.0/16", "149.28.0.0/16"]
+
+[[provider]]
+name = "Contabo Hosting"
+category = "foreign_datacenter"
+country = "DE"
+asns = ["AS51167"]
+cidrs = ["144.91.0.0/16", "161.97.0.0/16", "173.212.192.0/18"]
+
+[[provider]]
+name = "Leaseweb Hosting"
+category = "foreign_datacenter"
+country = "NL"
+asns = ["AS60781"]
+cidrs = ["5.79.0.0/16", "83.96.0.0/16", "185.17.0.0/16"]
+
+# ---------------------------------------------------------------------------
+# Iranian CDN / cloud / delivery providers
+# ---------------------------------------------------------------------------
+[[provider]]
+name = "ArvanCloud CDN"
+category = "iran_cdn"
+country = "IR"
+asns = ["AS205585"]
+cidrs = ["185.143.232.0/22", "94.101.182.0/23", "185.215.228.0/22"]
+
+[[provider]]
+name = "Derak Cloud CDN"
+category = "iran_cdn"
+country = "IR"
+asns = ["AS210296"]
+cidrs = ["185.229.104.0/22"]
+
+[[provider]]
+name = "ParsPack Cloud"
+category = "iran_cdn"
+country = "IR"
+asns = ["AS207850"]
+cidrs = ["185.206.92.0/22", "185.204.168.0/22"]
+
+# ---------------------------------------------------------------------------
+# Iranian datacenter / hosting providers
+# ---------------------------------------------------------------------------
+[[provider]]
+name = "Pars Pardazesh Datacenter"
+category = "iran_datacenter"
+country = "IR"
+asns = ["AS201133"]
+cidrs = ["185.51.200.0/22", "217.218.0.0/16"]
+
+[[provider]]
+name = "Asiatech Datacenter"
+category = "iran_datacenter"
+country = "IR"
+asns = ["AS43754"]
+cidrs = ["185.55.224.0/22", "91.98.0.0/16"]
+
+[[provider]]
+name = "Respina Networks Hosting"
+category = "iran_datacenter"
+country = "IR"
+asns = ["AS42337"]
+cidrs = ["31.24.200.0/22", "185.60.136.0/22"]
+
+[[provider]]
+name = "Shatel Hosting"
+category = "iran_datacenter"
+country = "IR"
+asns = ["AS31549"]
+cidrs = ["85.15.0.0/17", "37.32.0.0/19"]
+
+[[provider]]
+name = "Afranet Hosting"
+category = "iran_datacenter"
+country = "IR"
+asns = ["AS25184"]
+cidrs = ["77.104.64.0/18", "195.146.32.0/19"]
+
+[[provider]]
+name = "Datak Internet Engineering Hosting"
+category = "iran_datacenter"
+country = "IR"
+asns = ["AS35619"]
+cidrs = ["81.31.160.0/19", "185.94.96.0/22"]
+
+[[provider]]
+name = "Telecommunication Infrastructure Company (TIC) Network"
+category = "iran_datacenter"
+country = "IR"
+asns = ["AS12880"]
+cidrs = ["5.160.0.0/16", "2.176.0.0/12"]
