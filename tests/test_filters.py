@@ -1,7 +1,15 @@
 from __future__ import annotations
 
 from gaming.models import Filters, IPRecord
-from gaming.processing.filters import apply_filters, matches
+from gaming.processing.filters import (
+    apply_filters,
+    is_datacenter_only,
+    is_foreign_cdn,
+    is_iranian_cdn,
+    matches,
+    matches_region,
+    region_of,
+)
 
 
 def test_country_filter(sample_records):
@@ -62,3 +70,68 @@ def test_matches_single():
     rec = IPRecord(prefix="1.2.3.0/24", country="DE", asn="AS24940")
     assert matches(rec, Filters(countries=["DE"]))
     assert not matches(rec, Filters(countries=["IR"]))
+
+
+# ---- category classification: datacenter vs foreign-CDN vs Iranian-CDN ----
+def _rec(org, provider=None, country=None):
+    return IPRecord(
+        prefix="1.2.3.0/24",
+        organization=org,
+        provider=provider or org.lower(),
+        country=country,
+    )
+
+
+def test_datacenter_only_excludes_major_cdns():
+    # A real hosting/datacenter provider qualifies.
+    assert is_datacenter_only(_rec("Hetzner Online Hosting", country="DE"))
+    # Major CDN/cloud/edge/WAF providers are excluded from the datacenter path.
+    for cdn in ("Cloudflare, Inc.", "Fastly", "Akamai Technologies",
+                "Facebook / Meta Platforms", "Google LLC"):
+        rec = _rec(cdn, country="US")
+        assert is_foreign_cdn(rec), cdn
+        assert not is_datacenter_only(rec), cdn
+
+
+def test_foreign_cdn_matcher_includes_expected_providers():
+    for cdn in ("Cloudflare", "Fastly", "Akamai", "Meta Platforms", "Amazon AWS"):
+        assert is_foreign_cdn(_rec(cdn, country="US")), cdn
+    # An ordinary datacenter is not a foreign CDN.
+    assert not is_foreign_cdn(_rec("Hetzner Online", country="DE"))
+
+
+def test_iranian_cdn_is_separate_from_datacenter_and_foreign():
+    ir_cdn = _rec("ArvanCloud CDN", provider="arvancloud", country="IR")
+    assert is_iranian_cdn(ir_cdn)
+    # Iranian CDN must not be mistaken for a foreign CDN.
+    assert not is_foreign_cdn(ir_cdn)
+    # A foreign CDN is not an Iranian CDN.
+    assert not is_iranian_cdn(_rec("Cloudflare", country="US"))
+    # A plain Iranian datacenter (no CDN/edge signal) is not an Iranian CDN.
+    assert not is_iranian_cdn(_rec("Pars Pardazesh", provider="pars", country="IR"))
+
+
+def test_iranian_cdn_country_keyword_fallback():
+    # Sparse metadata: IR country + a generic "edge" keyword is enough.
+    rec = _rec("Some Iranian Edge Network", provider="", country="IR")
+    assert is_iranian_cdn(rec)
+
+
+def test_region_mapping_and_matching():
+    assert region_of(_rec("x", country="IR")) == "middle_east"
+    assert region_of(_rec("x", country="DE")) == "europe"
+    assert region_of(_rec("x", country="JP")) == "asia"
+    assert region_of(_rec("x", country="BR")) is None
+    assert region_of(_rec("x")) is None
+
+
+def test_matches_region_filters_cidrs():
+    de = _rec("Hetzner", country="DE")
+    ir = _rec("Pars", country="IR")
+    assert matches_region(de, "europe")
+    assert not matches_region(de, "middle_east")
+    assert matches_region(ir, "middle_east")
+    # "all" always matches; unmapped country only matches "all".
+    assert matches_region(de, "all")
+    assert matches_region(_rec("x", country="BR"), "all")
+    assert not matches_region(_rec("x", country="BR"), "europe")

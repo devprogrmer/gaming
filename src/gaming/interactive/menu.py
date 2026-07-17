@@ -15,16 +15,102 @@ scripts. Everything happens inside the loop.
 
 from __future__ import annotations
 
+import ipaddress
 import sys
+from collections.abc import Iterable
 from typing import TextIO
 
 from .. import __version__
 from . import ranges as ranges_mod
 from . import report as report_mod
 from . import scanner
+from .classify import GOOD
 from .progress import ProgressBar
 from .settings import Settings, load_settings, save_settings
 from .storage import HistoryStore
+
+
+def parse_first_octets(input_str: str) -> list[int]:
+    """Parse a comma-separated string of first octets into a validated list.
+
+    Each token must be an integer in the range 0-255. Blank tokens are
+    ignored, duplicates are removed (order preserved). Raises ``ValueError``
+    if any token is non-numeric or out of range, so the caller can show the
+    offending value to the user.
+    """
+    octets: list[int] = []
+    seen: set[int] = set()
+    for token in input_str.split(","):
+        text = token.strip()
+        if not text:
+            continue
+        try:
+            value = int(text)
+        except ValueError:
+            raise ValueError(f"{text!r} is not a number") from None
+        if not 0 <= value <= 255:
+            raise ValueError(f"{value} is out of range (0-255)")
+        if value not in seen:
+            seen.add(value)
+            octets.append(value)
+    return octets
+
+
+def matches_first_octet(prefix: str, allowed_octets: Iterable[int]) -> bool:
+    """Return True if the first octet of ``prefix`` is in ``allowed_octets``.
+
+    ``prefix`` may be a CIDR (``185.51.200.0/22``) or a bare IP. IPv6 prefixes
+    have no dotted first octet and never match. Malformed prefixes are treated
+    as non-matching rather than raising, so a single bad record can't abort a
+    whole filtering pass.
+    """
+    allowed = set(allowed_octets)
+    if not allowed:
+        return True
+    try:
+        net = ipaddress.ip_network(prefix, strict=False)
+    except ValueError:
+        return False
+    if net.version != 4:
+        return False
+    first_octet = int(net.network_address) >> 24 & 0xFF
+    return first_octet in allowed
+
+
+def format_bare_ips(hosts: Iterable[str]) -> str:
+    """Render hosts as a copy-paste-ready block: one bare IP per line.
+
+    De-duplicates while preserving order and strips whitespace. Produces no
+    prefixes, symbols, colours, or headers — just the addresses — so the output
+    can be piped or pasted straight into another tool. Returns an empty string
+    when there are no hosts.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for host in hosts:
+        ip = host.strip()
+        if ip and ip not in seen:
+            seen.add(ip)
+            out.append(ip)
+    return "\n".join(out)
+
+
+# Category scan definitions: key -> (menu label, predicate name in
+# gaming.processing.filters). The predicate enforces the separation between
+# datacenter-only, foreign-CDN, and Iranian-CDN targets in the actual filtering
+# step (not just the displayed label).
+_CATEGORY_LABELS = {
+    "datacenter": "Datacenter",
+    "foreign_cdn": "Foreign CDN/Cloud",
+    "iran_cdn": "Iranian CDN",
+}
+
+_REGION_LABELS = {
+    "middle_east": "Middle East",
+    "europe": "Europe",
+    "asia": "Asia",
+    "all": "All supported regions",
+}
 
 _MENU = """
 ==================================================
@@ -36,6 +122,11 @@ _MENU = """
   4) View scan history
   5) Manage IP ranges
   6) Settings
+  7) Update installed version
+  8) Filter CIDRs by first octet
+  9) Scan Datacenters
+ 10) Scan Foreign CDN/Cloud Providers
+ 11) Scan Iranian CDN Providers
   0) Exit
 --------------------------------------------------"""
 
@@ -92,6 +183,16 @@ class Menu:
                     self._manage_ranges()
                 elif choice == "6":
                     self._settings()
+                elif choice == "7":
+                    self._update_installed_version()
+                elif choice == "8":
+                    self._filter_by_first_octet()
+                elif choice == "9":
+                    self._scan_category("datacenter")
+                elif choice == "10":
+                    self._scan_category("foreign_cdn")
+                elif choice == "11":
+                    self._scan_category("iran_cdn")
                 elif choice in ("0", "q", "quit", "exit"):
                     self._print("Goodbye.")
                     return 0
@@ -326,6 +427,309 @@ class Menu:
         setattr(self.settings, attr, value)
         self.settings = self.settings.clamped()
         self._print(f"Set {label} to {getattr(self.settings, attr)}.")
+
+    def _select_region(self) -> str | None:
+        """Prompt for a scan region. Returns a region key or None if cancelled."""
+        choice = self._prompt(
+            "\nSelect region:\n"
+            "  1) Middle East\n"
+            "  2) Europe\n"
+            "  3) Asia\n"
+            "  4) All supported regions\n"
+            "Choice (default 4): "
+        ).strip()
+        mapping = {"1": "middle_east", "2": "europe", "3": "asia", "4": "all"}
+        if choice == "":
+            return "all"
+        region = mapping.get(choice)
+        if region is None:
+            self._print("Unknown region option.")
+        return region
+
+    def _scan_category(self, category: str) -> None:
+        """Discover, filter to a single category + region, then scan.
+
+        The three categories are mutually exclusive by construction — each uses
+        its own predicate from :mod:`gaming.processing.filters`:
+
+        * ``datacenter``   → :func:`is_datacenter_only` (excludes CDN/cloud/edge)
+        * ``foreign_cdn``  → :func:`is_foreign_cdn` (Cloudflare/Fastly/Meta/…)
+        * ``iran_cdn``     → :func:`is_iranian_cdn`
+
+        so a record can never leak from one scan flow into another. A region
+        selection is then applied to narrow which CIDRs reach the scanner.
+        """
+        from ..processing.filters import (
+            is_datacenter_only,
+            is_foreign_cdn,
+            is_iranian_cdn,
+            matches_region,
+        )
+
+        predicates = {
+            "datacenter": is_datacenter_only,
+            "foreign_cdn": is_foreign_cdn,
+            "iran_cdn": is_iranian_cdn,
+        }
+        predicate = predicates[category]
+        label = _CATEGORY_LABELS[category]
+
+        region = self._select_region()
+        if region is None:
+            return
+
+        # Imported lazily so launching the menu doesn't pull in the whole
+        # discovery/reachability stack unless a scan is actually run.
+        from .. import pipeline
+        from ..config import load_config
+        from ..models import Filters
+
+        # Iranian-CDN scans scope discovery to Iran so unrelated foreign records
+        # never enter the flow; the other categories rely on their predicate.
+        countries = ["IR"] if category == "iran_cdn" else []
+        config = load_config()
+        filters = Filters(countries=countries)
+
+        self._print(f"\n[{label}] Discovering IP ranges...")
+        raw = pipeline.discover(config, filters)
+        records = pipeline.process(raw, filters)
+
+        # Enforce category separation in the actual filtering, then the region.
+        matched = [r for r in records if predicate(r)]
+        matched = [r for r in matched if matches_region(r, region)]
+
+        region_label = _REGION_LABELS.get(region, region)
+        self._print(
+            f"\n{len(matched)} of {len(records)} discovered record(s) match "
+            f"{label} in {region_label}:"
+        )
+        if not matched:
+            self._print(
+                "  (none) — no matching CIDRs for this category/region."
+            )
+            return
+        for rec in matched:
+            country_tag = f" [{rec.country}]" if rec.country else ""
+            org_tag = f" — {rec.organization}" if rec.organization else ""
+            self._print(f"  {rec.prefix}{country_tag}{org_tag}")
+
+        self._auto_scan_matched(matched, scope=category)
+
+    def _update_installed_version(self) -> None:
+        """Upgrade or switch the installation in place from the interactive menu.
+
+        Reuses the same :func:`gaming.updater.run_update` flow as the ``gaming
+        update`` CLI subcommand, so user state (scan history, settings, custom
+        ranges) — which lives outside the install tree — is preserved. When an
+        in-place update isn't possible, the updater's error message carries the
+        safest manual fallback.
+        """
+        from ..updater import UpdateError, list_releases, run_update
+
+        self._print(f"\nCurrent installed version: {__version__}")
+
+        try:
+            releases = list_releases()
+        except UpdateError as exc:
+            self._print(f"Update failed: {exc}")
+            return
+        if releases:
+            self._print("Available releases (newest first): " + ", ".join(releases))
+
+        target = self._prompt(
+            "\nEnter a release to switch to (e.g. v0.1.0), "
+            "or blank to update to the latest: "
+        ).strip()
+        ref = target or None
+
+        try:
+            result = run_update(ref=ref, log=self._print)
+        except UpdateError as exc:
+            self._print(f"\nUpdate failed: {exc}")
+            return
+
+        if result.ref is not None:
+            self._print(
+                f"\nSwitched gaming {result.previous_version} -> "
+                f"{result.new_version} (release {result.ref})."
+            )
+        elif result.changed:
+            self._print(
+                f"\nUpdated gaming {result.previous_version} -> {result.new_version}."
+            )
+        else:
+            self._print(
+                f"\ngaming is already up to date (version {result.new_version})."
+            )
+        self._print("Restart gaming for the new version to take effect.")
+
+    def _filter_by_first_octet(self) -> None:
+        """Discover ranges, then filter the records by first octet + datacenter.
+
+        This layers dynamic filters on top of the existing discovery filters
+        (e.g. ``--country``): discovery + the standard ``Filters`` run first,
+        then the first-octet predicate and the datacenter choice are applied to
+        the resulting ``records`` list.
+        """
+        raw_input = self._prompt("Enter first octet(s) (0-255, comma-separated): ")
+        try:
+            allowed = parse_first_octets(raw_input)
+        except ValueError as exc:
+            self._print(f"Invalid input: {exc}")
+            return
+        if not allowed:
+            self._print("No octets provided. Nothing to filter.")
+            return
+
+        # Step 2: datacenter filtering.
+        dc_choice = self._prompt(
+            "\nFilter by datacenter?\n"
+            "  1) All datacenters\n"
+            "  2) Specific datacenter/provider/org\n"
+            "Choice: "
+        ).strip()
+        provider_term = ""
+        if dc_choice == "1":
+            dc_mode = "all"
+        elif dc_choice == "2":
+            dc_mode = "specific"
+            provider_term = self._prompt(
+                "Enter datacenter/provider/org name: "
+            ).strip()
+            if not provider_term:
+                self._print("No name provided. Nothing to filter.")
+                return
+        else:
+            self._print("Unknown option. Please choose 1 or 2.")
+            return
+
+        # Optional country filter so the dynamic filters demonstrably work
+        # alongside the existing discovery filters.
+        country = self._prompt(
+            "Optional country filter (e.g. IR,DE; blank for none): "
+        ).strip()
+
+        # Imported lazily so launching the menu doesn't pull in the whole
+        # discovery/reachability stack unless this feature is actually used.
+        from .. import pipeline
+        from ..config import load_config
+        from ..models import Filters
+        from ..processing.filters import is_datacenter
+
+        countries = [c.strip() for c in country.split(",") if c.strip()]
+        # A "specific" datacenter/provider/org term reuses the existing provider
+        # filter, so it is applied natively during process() alongside country.
+        providers = [provider_term] if dc_mode == "specific" else []
+        config = load_config()
+        filters = Filters(countries=countries, providers=providers)
+
+        self._print("\nDiscovering IP ranges...")
+        raw = pipeline.discover(config, filters)
+        records = pipeline.process(raw, filters)
+
+        # Apply the dynamic filters on top of the existing filters.
+        matched = [r for r in records if matches_first_octet(r.prefix, allowed)]
+        if dc_mode == "all":
+            matched = [r for r in matched if is_datacenter(r)]
+
+        octet_label = ", ".join(str(o) for o in allowed)
+        if dc_mode == "all":
+            dc_label = "all datacenters"
+        else:
+            dc_label = f"provider/org ~ {provider_term!r}"
+        self._print(
+            f"\n{len(matched)} of {len(records)} discovered record(s) match "
+            f"first octet [{octet_label}] and {dc_label}:"
+        )
+        if not matched:
+            self._print("  (none)")
+            return
+        for rec in matched:
+            country_tag = f" [{rec.country}]" if rec.country else ""
+            org_tag = f" — {rec.organization}" if rec.organization else ""
+            self._print(f"  {rec.prefix}{country_tag}{org_tag}")
+
+        # Step 3: auto-scan the filtered records with strict reachability +
+        # location requirements, then persist the qualifying hosts.
+        self._auto_scan_matched(matched)
+
+    def _auto_scan_matched(self, records: list, scope: str = "filtered") -> None:
+        """Health-scan the filtered records and keep only qualifying hosts.
+
+        Two strict requirements gate the final list:
+
+        * **Strict reachability** — a host must classify as ``GOOD`` (a real,
+          low-latency, low-loss reply). ``MEDIUM`` and ``BAD`` are rejected.
+        * **Location requirement** — the record must carry a verified country
+          code, so results without a known location are excluded.
+
+        Qualifying hosts are saved to scan history for later review, and their
+        addresses are printed as a clean, copy-paste-ready bare-IP block.
+        """
+        # Only scan records that already satisfy the location requirement; a
+        # record with no country can never qualify, so probing it is wasted work.
+        located = [r for r in records if r.country]
+        skipped_no_location = len(records) - len(located)
+        if skipped_no_location:
+            self._print(
+                f"\nExcluding {skipped_no_location} record(s) with no known "
+                f"location (location requirement)."
+            )
+        if not located:
+            self._print("No records meet the location requirement. Nothing to scan.")
+            return
+
+        # Map each probe host back to its record so we can report location.
+        host_to_record: dict[str, object] = {}
+        for rec in located:
+            host_to_record[rec.sample_host()] = rec
+        hosts = list(host_to_record)
+
+        self._print(
+            f"\nAuto-scanning {len(hosts)} located host(s) "
+            f"({self.settings.ping_count} probe(s) each, strict GOOD only)...\n"
+        )
+        bar = ProgressBar(len(hosts), stream=self.stdout, label="Auto-scan")
+
+        def _hook(_probe, verdict: str) -> None:
+            bar.update(verdict)
+
+        report = scanner.run_scan(
+            scope, self.settings, on_result=_hook, hosts=hosts
+        )
+        bar.finish()
+
+        # Strict reachability: keep only hosts classified GOOD.
+        qualifying = [
+            (probe, host_to_record[probe.host])
+            for probe, verdict in report.results
+            if verdict == GOOD and probe.host in host_to_record
+        ]
+
+        scan_id = scanner.persist(report, self.store)
+        self._print("")
+        self._print(
+            report_mod.summary_line(report.counts, report.total, stream=self.stdout)
+        )
+        self._print(
+            f"\n{len(qualifying)} host(s) meet both strict reachability (GOOD) "
+            f"and the location requirement:"
+        )
+        if not qualifying:
+            self._print("  (none)")
+        else:
+            for probe, rec in qualifying:
+                latency = f"{probe.avg_ms:.0f} ms" if probe.avg_ms is not None else "?"
+                self._print(f"  {probe.host}  [{rec.country}]  {latency}")
+
+        # Clean, copy-paste-ready output: bare alive IPs, one per line, no
+        # colours/symbols/prefixes. Empty section stays friendly.
+        self._print("\n--- Alive IPs (copy-paste ready) ---")
+        if qualifying:
+            self._print(format_bare_ips(probe.host for probe, _rec in qualifying))
+        else:
+            self._print("(no live IPs found)")
+        self._print(f"\nSaved as scan #{scan_id}. Use 'View scan history' to revisit it.")
 
 
 def run(argv: list[str] | None = None) -> int:

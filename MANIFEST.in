@@ -5,6 +5,8 @@ include gaming.example.toml
 include requirements.txt
 include install.sh
 include install.ps1
+include update.sh
+include update.ps1
 include src/gaming/py.typed
 recursive-include src/gaming/interactive/data *.txt
 recursive-include tests *.py

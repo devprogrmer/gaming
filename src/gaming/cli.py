@@ -6,6 +6,7 @@ Subcommands:
     discover  discover + filter + normalize prefixes (no reachability)
     check     run reachability/ports/global checks on given prefixes
     run       full pipeline: discover -> process -> reachability -> report
+    update    upgrade the installation in place to a new release
 
 Running ``gaming`` with no subcommand launches the interactive menu.
 """
@@ -133,6 +134,36 @@ def build_parser() -> argparse.ArgumentParser:
         "--collapse", action="store_true", help="collapse adjacent/contained prefixes"
     )
 
+    # update (in-place upgrade / version switch)
+    p_update = sub.add_parser(
+        "update",
+        help="upgrade or switch the installation in place to a specific release",
+    )
+    p_update.add_argument(
+        "--source",
+        help="path to the gaming checkout to install from (default: auto-detect)",
+    )
+    p_update.add_argument(
+        "--version",
+        dest="ref",
+        metavar="RELEASE",
+        help="switch to a specific release tag/ref (e.g. v0.1.0), including "
+        "older versions; omit to update to the latest",
+    )
+    p_update.add_argument(
+        "--list",
+        dest="list_releases",
+        action="store_true",
+        help="list the available release versions and exit",
+    )
+    p_update.add_argument(
+        "--no-pull",
+        dest="pull",
+        action="store_false",
+        default=None,
+        help="install the source as-is without running 'git pull' first",
+    )
+
     return parser
 
 
@@ -245,12 +276,64 @@ def cmd_run(args: argparse.Namespace, config: Config) -> int:
     return 0
 
 
+def cmd_update(args: argparse.Namespace, config: Config) -> int:
+    # Imported lazily so the normal CLI paths don't pull in update machinery.
+    from .updater import UpdateError, list_releases, run_update
+
+    source = getattr(args, "source", None)
+
+    if getattr(args, "list_releases", False):
+        try:
+            releases = list_releases(source)
+        except UpdateError as exc:
+            sys.stderr.write(f"update failed: {exc}\n")
+            return 1
+        if not releases:
+            sys.stdout.write(
+                "No release versions found "
+                "(the source is not a git checkout or has no tags).\n"
+            )
+            return 0
+        sys.stdout.write("Available releases (newest first):\n")
+        for tag in releases:
+            marker = "  * " if tag.lstrip("v") == __version__ else "    "
+            sys.stdout.write(f"{marker}{tag}\n")
+        return 0
+
+    try:
+        result = run_update(
+            source=source,
+            pull=getattr(args, "pull", None),
+            ref=getattr(args, "ref", None),
+            log=lambda m: sys.stdout.write(m + "\n"),
+        )
+    except UpdateError as exc:
+        sys.stderr.write(f"update failed: {exc}\n")
+        return 1
+
+    if result.ref is not None:
+        sys.stdout.write(
+            f"Switched gaming {result.previous_version} -> {result.new_version} "
+            f"(release {result.ref}).\n"
+        )
+    elif result.changed:
+        sys.stdout.write(
+            f"Updated gaming {result.previous_version} -> {result.new_version}.\n"
+        )
+    else:
+        sys.stdout.write(
+            f"gaming is already up to date (version {result.new_version}).\n"
+        )
+    return 0
+
+
 _HANDLERS = {
     "menu": cmd_menu,
     "sources": cmd_sources,
     "discover": cmd_discover,
     "check": cmd_check,
     "run": cmd_run,
+    "update": cmd_update,
 }
 
 

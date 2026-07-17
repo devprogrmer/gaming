@@ -6,6 +6,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-17
+
+### Added
+- **Separated scan categories** in the interactive menu, each with its own
+  discovery → filtering → scan flow so results never mix:
+  - *Scan Datacenters* — ordinary datacenter/hosting ranges only; major
+    CDN/cloud/edge/WAF providers (Cloudflare, Fastly, Akamai, Meta, Google
+    edge, ArvanCloud, …) are excluded in the actual filtering step.
+  - *Scan Foreign CDN/Cloud Providers* — targets exactly those global CDN/cloud
+    platforms.
+  - *Scan Iranian CDN Providers* — Iran-scoped CDN/edge networks via best-effort
+    org/provider + country heuristics.
+  - New predicates `is_datacenter_only`, `is_foreign_cdn`, `is_iranian_cdn` in
+    `processing.filters` enforce the separation.
+  - **Region selection** (Middle East / Europe / Asia / All) applied after the
+    scan type is chosen, narrowing which CIDRs reach the scanner.
+  - **Clean bare-IP output**: a copy-paste-ready block of alive IPs, one per
+    line with no prefixes/symbols/colours, printed for every scan category.
+  - **Update installed version** menu option reusing the `gaming update` flow.
+- **In-place update mechanism** to upgrade a deployed installation to a new
+  release without deleting the previous one first:
+  - `gaming update` subcommand (`--source PATH`, `--no-pull`) that reuses the
+    existing virtualenv and runs `pip install --upgrade` over the current
+    install; optionally `git pull --ff-only`s the source first.
+  - `update.sh` / `update.ps1` wrappers mirroring the installers.
+  - User state (scan history, settings, custom ranges) lives outside the
+    install tree and is preserved across upgrades.
+
 ## [0.2.0] - 2026-07-16
 
 ### Added

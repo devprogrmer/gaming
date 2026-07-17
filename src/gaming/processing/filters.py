@@ -63,6 +63,75 @@ _FOREIGN_DC_HINTS = (
     "global layer",
 )
 
+# Major foreign CDN / cloud / edge / WAF / global-platform providers. These are
+# deliberately kept separate from ordinary datacenter/hosting networks: the
+# datacenter-only scan path excludes them, and the foreign-CDN path includes
+# exactly these. Substring match against org/provider text (lower-cased).
+_FOREIGN_CDN_HINTS = (
+    "cloudflare",
+    "fastly",
+    "akamai",
+    "facebook",
+    "meta platforms",
+    "meta ",
+    "google",
+    "amazon",
+    "aws",
+    "cloudfront",
+    "microsoft",
+    "azure",
+    "limelight",
+    "edgecast",
+    "stackpath",
+    "cdn77",
+    "bunny",
+    "keycdn",
+    "incapsula",
+    "imperva",
+    "sucuri",
+    "gcore",
+    "g-core",
+    "lumen",
+    "level3",
+    "level 3",
+    "verizon digital",
+)
+
+# Iranian CDN / delivery / edge providers. Best-effort: allocation data for
+# Iranian networks is often sparse, so this is combined with a country + CDN
+# keyword heuristic in :func:`is_iranian_cdn`.
+_IR_CDN_HINTS = (
+    "arvan",
+    "arvancloud",
+    "abrarvan",
+    "derak",
+    "parspack",
+    "faraso",
+    "sabavision",
+    "iran cdn",
+    "irancdn",
+    "cdn.ir",
+)
+
+# Country-code groupings used by region selection. Best-effort static mapping
+# over the ISO-3166 alpha-2 codes carried on records; unmapped countries have
+# no region and only match the "all" selection.
+_REGIONS: dict[str, frozenset[str]] = {
+    "middle_east": frozenset(
+        {"IR", "IQ", "SA", "AE", "TR", "IL", "QA", "KW", "BH", "OM",
+         "YE", "JO", "LB", "SY", "PS", "EG"}
+    ),
+    "europe": frozenset(
+        {"DE", "FR", "GB", "NL", "IT", "ES", "SE", "CH", "PL", "RU",
+         "RO", "FI", "NO", "DK", "IE", "BE", "AT", "CZ", "PT", "UA"}
+    ),
+    "asia": frozenset(
+        {"CN", "JP", "KR", "IN", "SG", "HK", "TW", "TH", "VN", "MY",
+         "ID", "PH", "PK", "BD", "KZ"}
+    ),
+}
+REGION_CHOICES = ("middle_east", "europe", "asia", "all")
+
 
 def _text(rec: IPRecord) -> str:
     return " ".join(x for x in (rec.organization, rec.provider) if x).lower()
@@ -71,6 +140,87 @@ def _text(rec: IPRecord) -> str:
 def _is_datacenter(rec: IPRecord) -> bool:
     text = _text(rec)
     return any(k in text for k in _DATACENTER_KEYWORDS)
+
+
+def is_datacenter(rec: IPRecord) -> bool:
+    """Public predicate: True if the record's org/provider text looks like a
+    datacenter/hosting/cloud network.
+
+    Uses the same heuristic keywords as the ``--iran-datacenter`` /
+    ``--foreign-datacenter`` focus modes, but without any country scoping, so
+    callers can ask "is this any kind of datacenter?" directly.
+    """
+    return _is_datacenter(rec)
+
+
+def is_foreign_cdn(rec: IPRecord) -> bool:
+    """True if the record belongs to a major foreign CDN/cloud/edge/WAF provider.
+
+    Matches org/provider text against :data:`_FOREIGN_CDN_HINTS` (Cloudflare,
+    Fastly, Akamai, Meta/Facebook, Google, AWS, Azure, …). These are the large
+    global-platform networks that the datacenter-only scan path excludes and the
+    foreign-CDN scan path targets.
+    """
+    text = _text(rec)
+    return any(h in text for h in _FOREIGN_CDN_HINTS)
+
+
+def is_iranian_cdn(rec: IPRecord) -> bool:
+    """True if the record looks like an Iranian CDN/delivery/edge provider.
+
+    Best-effort, metadata-driven: a record qualifies if its org/provider text
+    names a known Iranian CDN (:data:`_IR_CDN_HINTS`), or if it is an Iranian
+    network (country ``IR`` or an Iranian provider hint) whose text also carries
+    a generic CDN/edge keyword. Iranian allocation data is often sparse, so the
+    country+keyword fallback widens coverage without hardcoding every provider.
+    """
+    text = _text(rec)
+    if any(h in text for h in _IR_CDN_HINTS):
+        return True
+    is_iran_network = rec.country == "IR" or any(
+        h in text for h in _IR_PROVIDER_HINTS
+    )
+    return is_iran_network and ("cdn" in text or "edge" in text)
+
+
+def is_datacenter_only(rec: IPRecord) -> bool:
+    """True if the record is an ordinary datacenter/hosting network **and not**
+    any CDN/cloud/edge/WAF provider (foreign or Iranian).
+
+    This is the predicate that gates the datacenter-only scan path: it keeps
+    real hosting/colo/datacenter ranges while excluding Cloudflare, Fastly,
+    Meta, Akamai, Google edge, ArvanCloud, and similar delivery/edge platforms
+    so they can never leak into datacenter results. A generic ``cdn``/``edge``
+    keyword in the org text also disqualifies a record from this path.
+    """
+    if is_foreign_cdn(rec) or is_iranian_cdn(rec):
+        return False
+    text = _text(rec)
+    if "cdn" in text or "edge" in text:
+        return False
+    return _is_datacenter(rec)
+
+
+def region_of(rec: IPRecord) -> str | None:
+    """Return the region key for a record's country, or ``None`` if unmapped."""
+    country = (rec.country or "").upper()
+    if not country:
+        return None
+    for region, codes in _REGIONS.items():
+        if country in codes:
+            return region
+    return None
+
+
+def matches_region(rec: IPRecord, region: str) -> bool:
+    """True if ``rec`` belongs to ``region`` (``"all"`` matches everything).
+
+    Records with no known/mapped country never match a specific region, so a
+    region selection acts as a positive location requirement.
+    """
+    if region == "all":
+        return True
+    return region_of(rec) == region
 
 
 def _is_iran(rec: IPRecord) -> bool:

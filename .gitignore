@@ -19,3 +19,6 @@ foreign.json
 report.json
 out.json
 out.csv
+
+# Local tooling config that may carry secrets/credentials
+config.json
