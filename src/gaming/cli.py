@@ -164,6 +164,88 @@ def build_parser() -> argparse.ArgumentParser:
         help="install the source as-is without running 'git pull' first",
     )
 
+    # web (local dashboard)
+    p_web = sub.add_parser(
+        "web",
+        help="launch the local web dashboard (search, scan, history, settings)",
+    )
+    p_web.add_argument(
+        "--bind",
+        default="0.0.0.0",
+        help="address to bind (default: 0.0.0.0; use 127.0.0.1 to stay local)",
+    )
+    p_web.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="port to listen on (default: auto-pick a free port in 20000-65000)",
+    )
+    p_web.add_argument(
+        "--tls",
+        action="store_true",
+        help="serve over HTTPS with a cached self-signed certificate",
+    )
+    p_web.add_argument(
+        "--reset-credentials",
+        action="store_true",
+        help="regenerate the dashboard username/password and invalidate sessions",
+    )
+
+    # refresh-seeds (re-validate bundled provider CIDRs against live BGP)
+    p_refresh = sub.add_parser(
+        "refresh-seeds",
+        help="re-validate bundled provider seed CIDRs against announced prefixes",
+    )
+    p_refresh.add_argument(
+        "--timeout",
+        type=float,
+        default=15.0,
+        help="per-provider lookup timeout in seconds (default: 15)",
+    )
+
+    # validate-seed (validate + stamp the seed file's last_validated marker)
+    p_validate = sub.add_parser(
+        "validate-seed",
+        help="validate bundled seed CIDRs and update the last_validated marker",
+    )
+    p_validate.add_argument(
+        "--timeout",
+        type=float,
+        default=15.0,
+        help="per-provider lookup timeout in seconds (default: 15)",
+    )
+    p_validate.add_argument(
+        "--no-marker",
+        dest="update_marker",
+        action="store_false",
+        default=True,
+        help="report only; do not update the seed file's last_validated marker",
+    )
+
+    # schedule (recurring background re-scans of a saved scope)
+    p_sched = sub.add_parser(
+        "schedule",
+        help="re-run a saved scope scan on an interval, updating history",
+    )
+    p_sched.add_argument(
+        "scope",
+        nargs="?",
+        default="iran",
+        help="scope to re-scan: iran or foreign (default: iran)",
+    )
+    p_sched.add_argument(
+        "--interval",
+        type=float,
+        default=900.0,
+        help="seconds between scans (default: 900; floored at 30)",
+    )
+    p_sched.add_argument(
+        "--count",
+        type=int,
+        default=0,
+        help="stop after N scans (default: 0 = run until interrupted)",
+    )
+
     return parser
 
 
@@ -216,6 +298,17 @@ def cmd_menu(args: argparse.Namespace, config: Config) -> int:
 def cmd_sources(args: argparse.Namespace, config: Config) -> int:
     for name in available_sources():
         sys.stdout.write(f"{name}\n")
+    # Surface how stale the bundled provider seed data is (Part F marker).
+    try:
+        from .interactive.providers import seed_last_validated
+
+        stamp = seed_last_validated()
+    except Exception:  # noqa: BLE001 - informational only, never fail `sources`
+        stamp = ""
+    sys.stdout.write(
+        f"\nseed data last validated: {stamp or 'never'} "
+        "(run 'gaming validate-seed')\n"
+    )
     return 0
 
 
@@ -327,6 +420,122 @@ def cmd_update(args: argparse.Namespace, config: Config) -> int:
     return 0
 
 
+def cmd_web(args: argparse.Namespace, config: Config) -> int:
+    # Imported lazily so normal CLI paths don't pull in the http server stack.
+    from .web.server import serve
+
+    return serve(
+        bind=getattr(args, "bind", "0.0.0.0"),
+        port=getattr(args, "port", None),
+        use_tls=getattr(args, "tls", False),
+        reset_credentials=getattr(args, "reset_credentials", False),
+    )
+
+
+def cmd_refresh_seeds(args: argparse.Namespace, config: Config) -> int:
+    """Re-validate bundled provider seed CIDRs against currently-announced BGP.
+
+    Read-only: flags stale-looking CIDRs (and providers that couldn't be
+    checked) but never edits the seed file.
+    """
+    from .interactive.providers import refresh_seed_data
+
+    checks = refresh_seed_data(timeout=getattr(args, "timeout", 15.0))
+    _print_seed_checks(checks)
+    return 0
+
+
+def cmd_validate_seed(args: argparse.Namespace, config: Config) -> int:
+    """Validate bundled seed CIDRs and stamp the ``last_validated`` marker.
+
+    Reports the same stale-CIDR findings as ``refresh-seeds`` but, unless
+    ``--no-marker`` is given, also updates the seed file's ``[meta].last_validated``
+    date. It never adds, edits, or deletes any provider entry.
+    """
+    from .interactive.providers import validate_seed_data
+
+    report = validate_seed_data(
+        timeout=getattr(args, "timeout", 15.0),
+        update_marker=getattr(args, "update_marker", True),
+    )
+    _print_seed_checks(report.checks)
+    if report.marker_updated:
+        print(f"Updated seed last_validated marker to {report.last_validated}.")
+    elif getattr(args, "update_marker", True):
+        print(
+            "Seed last_validated marker not updated "
+            "(no provider was reachable, or the seed file is read-only)."
+        )
+    return 0
+
+
+def _print_seed_checks(checks: list) -> None:
+    """Shared reporting for refresh-seeds / validate-seed."""
+    checked = [c for c in checks if c.checked]
+    stale = [c for c in checked if c.stale]
+    print(f"Validated {len(checked)}/{len(checks)} providers with a live lookup.")
+    if not stale:
+        print("No stale seed CIDRs detected.")
+    else:
+        print(f"{sum(len(c.stale) for c in stale)} seed CIDR(s) look stale:")
+        for c in stale:
+            for cidr in c.stale:
+                print(f"  {c.name}: {cidr} not in any announced prefix")
+    unchecked = [c for c in checks if not c.checked]
+    if unchecked:
+        print(
+            f"{len(unchecked)} provider(s) could not be checked "
+            "(no ASNs or lookup failed); left untouched."
+        )
+
+
+def cmd_schedule(args: argparse.Namespace, config: Config) -> int:
+    """Run recurring background re-scans of a saved scope.
+
+    With ``--count N`` it runs exactly N scans and returns; otherwise it runs
+    until interrupted (Ctrl-C). Each run is appended to scan history and, when
+    enabled in Settings, triggers verdict-change alerts.
+    """
+    import time
+
+    from .interactive.scheduler import ScanScheduler
+
+    scope = getattr(args, "scope", "iran")
+    interval = getattr(args, "interval", 900.0)
+    count = getattr(args, "count", 0)
+
+    sched = ScanScheduler(scope, interval, run_immediately=True)
+
+    if count and count > 0:
+        for _ in range(count):
+            state = sched.run_once()
+            _print_schedule_run(state)
+        return 0
+
+    print(
+        f"Scheduling '{scope}' scans every {sched.interval:.0f}s. "
+        "Press Ctrl-C to stop."
+    )
+    sched.start()
+    try:
+        while sched.running:
+            time.sleep(1.0)
+    except KeyboardInterrupt:
+        print("\nStopping scheduler...")
+        sched.stop()
+    return 0
+
+
+def _print_schedule_run(state) -> None:
+    if state.last_error:
+        print(f"[{state.scope}] scan failed: {state.last_error}")
+    else:
+        extra = f", {state.last_changes} verdict change(s)" if state.last_changes else ""
+        print(
+            f"[{state.scope}] scan #{state.runs} saved (id={state.last_scan_id}){extra}"
+        )
+
+
 _HANDLERS = {
     "menu": cmd_menu,
     "sources": cmd_sources,
@@ -334,6 +543,10 @@ _HANDLERS = {
     "check": cmd_check,
     "run": cmd_run,
     "update": cmd_update,
+    "web": cmd_web,
+    "refresh-seeds": cmd_refresh_seeds,
+    "validate-seed": cmd_validate_seed,
+    "schedule": cmd_schedule,
 }
 
 

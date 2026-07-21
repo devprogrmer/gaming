@@ -16,6 +16,10 @@ class DiscoveryContext:
     filters: Filters
     timeout: float = 5.0
     offline: bool = False
+    # When True, per-request failures inside a source are surfaced at WARNING
+    # with the real exception type + message (not just a terse DEBUG line), so
+    # a live run can show *why* discovery fell back to sample data.
+    verbose_errors: bool = False
 
 
 class Source(abc.ABC):
@@ -32,6 +36,24 @@ class Source(abc.ABC):
     def __init__(self, context: DiscoveryContext) -> None:
         self.context = context
         self.log = get_logger(f"gaming.discovery.{self.name}")
+
+    # ---- error reporting -------------------------------------------------
+    def _report_request_error(self, what: str, exc: BaseException) -> None:
+        """Log a single failed per-request lookup, with its real cause.
+
+        Normally this is a terse DEBUG line so a healthy run stays quiet. When
+        ``context.verbose_errors`` is set (the interactive "discover & save"
+        pass, or ``--log-level DEBUG``), it is raised to WARNING and carries the
+        exception *type* and message so real failures — DNS, refused, timeout,
+        TLS, HTTP status, parse — are visible instead of being silently masked
+        as a generic sample-data fallback.
+        """
+        msg = "%s failed: %s: %s"
+        args = (what, type(exc).__name__, exc)
+        if self.context.verbose_errors:
+            self.log.warning(msg, *args)
+        else:
+            self.log.debug(msg, *args)
 
     # ---- public API ------------------------------------------------------
     def discover(self) -> list[IPRecord]:

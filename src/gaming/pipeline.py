@@ -12,7 +12,7 @@ from .logging_setup import get_logger
 from .models import Filters, IPRecord
 from .processing import apply_filters, normalize_records
 from .processing.normalize import collapse_prefixes
-from .reachability.global_check import global_reachability
+from .reachability.global_check import build_providers, check_abroad
 from .reachability.local import check_alive_bulk
 from .reachability.ports import probe_records
 
@@ -24,12 +24,24 @@ def discover(
     filters: Filters | None = None,
     *,
     sources: list[str] | None = None,
+    timeout: float | None = None,
+    verbose_errors: bool = False,
 ) -> list[IPRecord]:
-    """Run all configured discovery sources concurrently and merge results."""
+    """Run all configured discovery sources concurrently and merge results.
+
+    ``timeout`` overrides the per-request timeout for this pass only (e.g. the
+    interactive bulk "discover & save" flow uses a longer timeout than quick
+    ad-hoc CLI calls). ``verbose_errors`` surfaces each source's per-request
+    failure at WARNING with its real exception type instead of a terse DEBUG
+    line, so a live run shows *why* it fell back to sample data.
+    """
     filters = filters or config.to_filters()
     source_names = sources or config.sources
     ctx = DiscoveryContext(
-        filters=filters, timeout=config.timeout, offline=config.offline
+        filters=filters,
+        timeout=config.timeout if timeout is None else timeout,
+        offline=config.offline,
+        verbose_errors=verbose_errors,
     )
 
     collected: list[IPRecord] = []
@@ -105,15 +117,20 @@ def _run_global_checks(records: list[IPRecord], config: Config) -> None:
     gc = config.global_check
     max_targets = int(gc.get("max_targets", 10))
     port = int(config.reachability.get("tcp_probe_port", 80))
+    providers = build_providers(str(gc.get("provider", "check-host")))
 
     # Only probe alive (or unknown-but-public) records, capped for politeness.
     candidates = [r for r in records if r.alive is not False][:max_targets]
 
     def _worker(rec: IPRecord) -> None:
         try:
-            rec.global_reachable = global_reachability(
-                rec.sample_host(), timeout=config.timeout, port=port
+            result = check_abroad(
+                rec.sample_host(),
+                providers=providers,
+                timeout=config.timeout,
+                port=port,
             )
+            rec.global_reachable = result.reachable
         except Exception as exc:  # noqa: BLE001
             rec.notes = f"{rec.notes}; global-check error: {exc}".strip("; ")
 

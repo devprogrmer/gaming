@@ -4,6 +4,12 @@ Thanks for your interest in improving **gaming** — a network discovery and
 reachability analysis CLI (not a video game). This guide covers local setup,
 the development workflow, and how to extend the tool.
 
+> **New here?** [`docs/architecture.md`](docs/architecture.md) explains how the
+> pieces fit together: the discover → process → reachability → report pipeline,
+> the CLI vs. interactive-scanner paths, the SQLite history schema, the
+> `Config`/`Filters` vs. interactive `Settings` split, and the abroad-check
+> provider abstraction (including how to add a new provider).
+
 ## Development setup
 
 Requires Python **3.11+**.

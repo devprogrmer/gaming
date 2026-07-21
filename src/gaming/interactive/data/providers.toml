@@ -11,6 +11,11 @@
 # category is one of: foreign_cdn, foreign_datacenter, iran_cdn, iran_datacenter
 # country is the ISO-3166 alpha-2 code (best-effort; IR for Iranian networks).
 
+# Freshness marker updated by `gaming validate-seed` (never edits provider
+# entries below). Empty string means "never validated".
+[meta]
+last_validated = ""
+
 # ---------------------------------------------------------------------------
 # Foreign CDN / cloud / edge / WAF platforms
 # ---------------------------------------------------------------------------
@@ -190,3 +195,137 @@ category = "iran_datacenter"
 country = "IR"
 asns = ["AS12880"]
 cidrs = ["5.160.0.0/16", "2.176.0.0/12"]
+
+# ===========================================================================
+# Additional providers (Part C: broader seed coverage)
+# ===========================================================================
+
+# ---- More foreign CDN / edge / WAF platforms ------------------------------
+[[provider]]
+name = "StackPath CDN"
+category = "foreign_cdn"
+country = "US"
+asns = ["AS33438"]
+cidrs = ["151.139.0.0/16", "205.185.192.0/18"]
+
+[[provider]]
+name = "CDN77"
+category = "foreign_cdn"
+country = "GB"
+asns = ["AS60068"]
+cidrs = ["185.59.220.0/22", "5.104.64.0/21"]
+
+[[provider]]
+name = "Gcore Edge CDN"
+category = "foreign_cdn"
+country = "LU"
+asns = ["AS199524"]
+cidrs = ["92.223.64.0/18", "5.188.0.0/18"]
+
+[[provider]]
+name = "BunnyCDN"
+category = "foreign_cdn"
+country = "SI"
+asns = ["AS200325"]
+cidrs = ["89.187.160.0/20", "138.199.0.0/16"]
+
+[[provider]]
+name = "Imperva Incapsula CDN"
+category = "foreign_cdn"
+country = "US"
+asns = ["AS19551"]
+cidrs = ["45.60.0.0/16", "199.83.128.0/21"]
+
+# ---- More foreign datacenter / hosting companies --------------------------
+[[provider]]
+name = "Linode Cloud Hosting"
+category = "foreign_datacenter"
+country = "US"
+asns = ["AS63949"]
+cidrs = ["45.79.0.0/16", "172.104.0.0/15", "139.162.0.0/16", "66.175.208.0/20"]
+
+[[provider]]
+name = "Scaleway Hosting"
+category = "foreign_datacenter"
+country = "FR"
+asns = ["AS12876"]
+cidrs = ["51.15.0.0/16", "163.172.0.0/16", "212.47.224.0/19"]
+
+[[provider]]
+name = "Alibaba Cloud"
+category = "foreign_datacenter"
+country = "CN"
+asns = ["AS45102"]
+cidrs = ["47.88.0.0/14", "8.208.0.0/13"]
+
+[[provider]]
+name = "Tencent Cloud"
+category = "foreign_datacenter"
+country = "CN"
+asns = ["AS132203"]
+cidrs = ["43.128.0.0/14", "129.226.0.0/16"]
+
+[[provider]]
+name = "IBM Cloud"
+category = "foreign_datacenter"
+country = "US"
+asns = ["AS36351"]
+cidrs = ["169.60.0.0/16", "158.175.0.0/16"]
+
+[[provider]]
+name = "netcup Hosting"
+category = "foreign_datacenter"
+country = "DE"
+asns = ["AS197540"]
+cidrs = ["46.38.232.0/21", "152.89.104.0/21"]
+
+[[provider]]
+name = "UpCloud Hosting"
+category = "foreign_datacenter"
+country = "FI"
+asns = ["AS202053"]
+cidrs = ["94.237.0.0/16", "83.136.248.0/21"]
+
+# ---- More Iranian CDN / delivery providers --------------------------------
+[[provider]]
+name = "Sabavision CDN"
+category = "iran_cdn"
+country = "IR"
+asns = ["AS61173"]
+cidrs = ["178.216.248.0/22"]
+
+[[provider]]
+name = "Faraso Samaneh CDN"
+category = "iran_cdn"
+country = "IR"
+asns = ["AS205647"]
+cidrs = ["185.128.80.0/22"]
+
+# ---- More Iranian datacenter / hosting providers --------------------------
+[[provider]]
+name = "Sindad Cloud"
+category = "iran_datacenter"
+country = "IR"
+asns = ["AS205207"]
+cidrs = ["185.192.108.0/22"]
+
+[[provider]]
+name = "MabnaTelecom Network"
+category = "iran_datacenter"
+country = "IR"
+asns = ["AS51759"]
+cidrs = ["185.209.196.0/22", "194.5.204.0/22"]
+
+[[provider]]
+name = "Pishgaman Networks"
+category = "iran_datacenter"
+country = "IR"
+asns = ["AS49666"]
+cidrs = ["46.209.0.0/16"]
+
+[[provider]]
+name = "MobinNet Hosting"
+category = "iran_datacenter"
+country = "IR"
+asns = ["AS50810"]
+cidrs = ["176.65.192.0/18"]

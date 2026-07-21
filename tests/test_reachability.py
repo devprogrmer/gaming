@@ -1,8 +1,22 @@
 from __future__ import annotations
 
 from gaming.models import IPRecord
+from gaming.reachability import global_check as gc
 from gaming.reachability import local, ports
-from gaming.reachability.global_check import _interpret, _is_public, global_reachability
+from gaming.reachability.global_check import (
+    ABROAD_NOT_APPLICABLE,
+    ABROAD_OK,
+    ABROAD_UNAVAILABLE,
+    AbroadResult,
+    CheckHostProvider,
+    RipeAtlasProvider,
+    _interpret,
+    _is_public,
+    build_providers,
+    check_abroad,
+    combine_results,
+    global_reachability,
+)
 
 
 def test_check_alive_tcp_success(monkeypatch):
@@ -54,12 +68,201 @@ def test_global_is_public():
 
 
 def test_global_skips_private():
-    # private host returns None without any network call
-    assert global_reachability("10.0.0.1") is None
+    # private host returns (None, 0, 0) without any network call
+    assert global_reachability("10.0.0.1") == (None, 0, 0)
 
 
 def test_interpret_results():
-    assert _interpret({"n1": [{"time": 0.1, "address": "1.2.3.4"}]}) is True
-    assert _interpret({"n1": [{"error": "timeout"}]}) is False
-    assert _interpret({"n1": None}) is None  # all pending
-    assert _interpret({"n1": [[["OK", 0.05]]]}) is True
+    assert _interpret({"n1": [{"time": 0.1, "address": "1.2.3.4"}]}) == (1, 1)
+    assert _interpret({"n1": [{"error": "timeout"}]}) == (0, 1)
+    assert _interpret({"n1": None}) == (0, 0)  # all pending
+    assert _interpret({"n1": [[["OK", 0.05]]]}) == (1, 1)
+
+
+def test_interpret_threshold_mix():
+    # Two nodes report; one OK, one failed -> 1 of 2.
+    ok, total = _interpret(
+        {"n1": [{"time": 0.1, "address": "1.2.3.4"}], "n2": [{"error": "timeout"}]}
+    )
+    assert (ok, total) == (1, 2)
+
+
+def _stub_global_http(monkeypatch, result_payload):
+    """Fake check-host.net: instant start + a single result payload, no sleeps."""
+    def _fake_get_json(url, **kw):
+        if "/check-tcp" in url or "/check-ping" in url:
+            return {"request_id": "req-123"}
+        return result_payload
+
+    monkeypatch.setattr(gc, "get_json", _fake_get_json)
+    monkeypatch.setattr(gc.time, "sleep", lambda _s: None)
+
+
+def test_global_reachability_meets_threshold(monkeypatch):
+    # 1 of 2 nodes OK -> reachable at the default 0.5 fraction.
+    _stub_global_http(
+        monkeypatch,
+        {"n1": [{"time": 0.1, "address": "1.2.3.4"}], "n2": [{"error": "x"}]},
+    )
+    assert global_reachability("8.8.8.8") == (True, 1, 2)
+
+
+def test_global_reachability_below_threshold(monkeypatch):
+    # 1 of 3 nodes OK -> below 0.5 -> not reachable, counts still returned.
+    _stub_global_http(
+        monkeypatch,
+        {
+            "n1": [{"time": 0.1, "address": "1.2.3.4"}],
+            "n2": [{"error": "x"}],
+            "n3": [{"error": "y"}],
+        },
+    )
+    assert global_reachability("8.8.8.8") == (False, 1, 3)
+
+
+def test_global_reachability_custom_fraction(monkeypatch):
+    _stub_global_http(
+        monkeypatch,
+        {
+            "n1": [{"time": 0.1, "address": "1.2.3.4"}],
+            "n2": [{"error": "x"}],
+            "n3": [{"error": "y"}],
+        },
+    )
+    # A stricter/looser threshold changes the verdict, not the counts.
+    assert global_reachability("8.8.8.8", min_ok_fraction=0.3) == (True, 1, 3)
+    assert global_reachability("8.8.8.8", min_ok_fraction=0.9) == (False, 1, 3)
+
+
+# ---- Part D: provider abstraction + service-unavailable signal ------------
+def test_checkhost_provider_success(monkeypatch):
+    _stub_global_http(
+        monkeypatch,
+        {"n1": [{"time": 0.1, "address": "1.2.3.4"}], "n2": [{"error": "x"}]},
+    )
+    res = CheckHostProvider().check("8.8.8.8")
+    assert res.status == ABROAD_OK
+    assert res.reachable is True
+    assert (res.nodes_ok, res.nodes_total) == (1, 2)
+
+
+def test_checkhost_provider_non_public_is_not_applicable():
+    res = CheckHostProvider().check("10.0.0.1")
+    assert res.status == ABROAD_NOT_APPLICABLE
+    assert res.reachable is None
+
+
+def test_checkhost_provider_start_failure_is_unavailable(monkeypatch):
+    # The start request raises -> service unavailable, NOT a false "not reachable".
+    def _boom(url, **kw):
+        raise gc.HTTPError("check-host down")
+
+    monkeypatch.setattr(gc, "get_json", _boom)
+    monkeypatch.setattr(gc.time, "sleep", lambda _s: None)
+    res = CheckHostProvider().check("8.8.8.8")
+    assert res.status == ABROAD_UNAVAILABLE
+    assert res.reachable is None
+    assert (res.nodes_ok, res.nodes_total) == (0, 0)
+
+
+def test_checkhost_provider_never_answers_is_unavailable(monkeypatch):
+    # Start succeeds, but the result endpoint stays fully pending -> unavailable.
+    _stub_global_http(monkeypatch, {"n1": None, "n2": None})
+    res = CheckHostProvider(poll_attempts=2).check("8.8.8.8")
+    assert res.status == ABROAD_UNAVAILABLE
+
+
+def _stub_atlas_http(monkeypatch, *, create, results):
+    def _fake_post_json(url, payload, **kw):
+        return create
+
+    def _fake_get_json(url, **kw):
+        return results
+
+    monkeypatch.setattr(gc, "post_json", _fake_post_json)
+    monkeypatch.setattr(gc, "get_json", _fake_get_json)
+    monkeypatch.setattr(gc.time, "sleep", lambda _s: None)
+
+
+def test_ripe_atlas_provider_success(monkeypatch):
+    _stub_atlas_http(
+        monkeypatch,
+        create={"measurements": [12345]},
+        results=[{"rcvd": 3, "avg": 25.0}, {"rcvd": 0, "avg": -1}],
+    )
+    res = RipeAtlasProvider(api_key="k").check("8.8.8.8")
+    assert res.status == ABROAD_OK
+    assert (res.nodes_ok, res.nodes_total) == (1, 2)
+    assert res.reachable is True
+
+
+def test_ripe_atlas_provider_create_failure_is_unavailable(monkeypatch):
+    def _boom(url, payload, **kw):
+        raise gc.HTTPError("atlas down")
+
+    monkeypatch.setattr(gc, "post_json", _boom)
+    monkeypatch.setattr(gc.time, "sleep", lambda _s: None)
+    res = RipeAtlasProvider(api_key="k").check("8.8.8.8")
+    assert res.status == ABROAD_UNAVAILABLE
+
+
+def test_ripe_atlas_without_key_is_unavailable_and_skipped(monkeypatch):
+    monkeypatch.delenv("GAMING_RIPE_ATLAS_KEY", raising=False)
+    # A keyless provider reports unavailable directly...
+    assert RipeAtlasProvider(api_key=None).check("8.8.8.8").status == ABROAD_UNAVAILABLE
+    # ...and build_providers("both") silently drops it, leaving only check-host.
+    provs = build_providers("both")
+    assert [p.name for p in provs] == ["check-host"]
+
+
+def test_build_providers_includes_atlas_with_key():
+    provs = build_providers("both", ripe_atlas_key="k")
+    assert {p.name for p in provs} == {"check-host", "ripe-atlas"}
+    assert [p.name for p in build_providers("ripe-atlas", ripe_atlas_key="k")] == [
+        "ripe-atlas"
+    ]
+
+
+def test_combine_results_sums_node_counts():
+    # Two providers: 1/2 and 2/2 -> combined 3/4 -> >=0.5 reachable.
+    combined = combine_results(
+        [AbroadResult.ok(False, 1, 2), AbroadResult.ok(True, 2, 2)],
+        min_ok_fraction=0.5,
+    )
+    assert combined.status == ABROAD_OK
+    assert (combined.nodes_ok, combined.nodes_total) == (3, 4)
+    assert combined.reachable is True
+
+
+def test_combine_results_one_ok_one_unavailable():
+    # A provider outage doesn't erase the other's real answer.
+    combined = combine_results(
+        [AbroadResult.ok(True, 2, 2), AbroadResult.unavailable()],
+        min_ok_fraction=0.5,
+    )
+    assert combined.status == ABROAD_OK
+    assert (combined.nodes_ok, combined.nodes_total) == (2, 2)
+
+
+def test_combine_results_all_unavailable():
+    combined = combine_results(
+        [AbroadResult.unavailable(), AbroadResult.unavailable()]
+    )
+    assert combined.status == ABROAD_UNAVAILABLE
+    assert combined.reachable is None
+
+
+def test_combine_results_all_not_applicable():
+    combined = combine_results([AbroadResult.not_applicable()])
+    assert combined.status == ABROAD_NOT_APPLICABLE
+
+
+def test_check_abroad_provider_exception_becomes_unavailable(monkeypatch):
+    class _Boom:
+        name = "boom"
+
+        def check(self, host, **kw):
+            raise RuntimeError("kaboom")
+
+    res = check_abroad("8.8.8.8", providers=[_Boom()])
+    assert res.status == ABROAD_UNAVAILABLE

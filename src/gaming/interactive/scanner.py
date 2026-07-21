@@ -21,16 +21,47 @@ to report which destination country/provider group answers fastest from here.
 from __future__ import annotations
 
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
 from ..logging_setup import get_logger
+from ..reachability.global_check import build_providers, check_abroad
+from ..reachability.ports import probe_ports
 from . import ranges as ranges_mod
-from .classify import ProbeResult, classify, summarize
+from .classify import (
+    CombinedResult,
+    ProbeResult,
+    classify,
+    classify_bidirectional,
+    summarize,
+    summarize_combined,
+)
 from .pinger import ping_host, scan_hosts
 from .settings import Settings
 from .storage import HistoryStore
 
 log = get_logger("gaming.interactive.scanner")
+
+# The local per-probe timeout (Settings.timeout, ~2s) is far too short for the
+# check-host.net HTTP round-trips; use a floor so the abroad check isn't
+# starved into spurious failures.
+_GLOBAL_TIMEOUT_FLOOR = 5.0
+
+
+def _normalize_abroad(result) -> tuple[bool | None, int, int, str]:
+    """Normalise an abroad result into ``(reachable, ok, total, status)``.
+
+    Accepts an :class:`~gaming.reachability.global_check.AbroadResult` or, for
+    backward compatibility with older stubs/callers, a legacy
+    ``(reachable, ok, total)`` tuple. A bare tuple has no explicit status, so it
+    is mapped to "ok" when a node answered and "not_applicable" otherwise.
+    """
+    status = getattr(result, "status", None)
+    if status is not None:
+        return result.reachable, result.nodes_ok, result.nodes_total, status
+    reachable, ok, total = result
+    derived = "ok" if total > 0 else "not_applicable"
+    return reachable, ok, total, derived
 
 
 @dataclass(slots=True)
@@ -38,7 +69,12 @@ class ScanReport:
     """Full outcome of a scan, ready to display and persist."""
 
     scope: str
-    results: list[tuple[ProbeResult, str]]  # (probe, verdict) pairs
+    results: list[tuple[ProbeResult, str]]  # (probe, health verdict) pairs
+    # Index-aligned with ``results``: the bidirectional/port enrichment for each
+    # host. Kept as a parallel list so the existing (ProbeResult, verdict) shape
+    # that storage/report/summarize rely on is undisturbed. Empty when no scan
+    # populated it (older callers / direct construction).
+    combined: list[CombinedResult] = field(default_factory=list)
 
     @property
     def total(self) -> int:
@@ -47,6 +83,15 @@ class ScanReport:
     @property
     def counts(self) -> dict[str, int]:
         return summarize([verdict for _p, verdict in self.results])
+
+    @property
+    def combined_counts(self) -> dict[str, int]:
+        """Tally of INTERNATIONAL / IRAN_ONLY / ABROAD_ONLY / UNREACHABLE."""
+        return summarize_combined([self.combined_verdict(c) for c in self.combined])
+
+    @staticmethod
+    def combined_verdict(c: CombinedResult) -> str:
+        return classify_bidirectional(c.iran_reachable, c.abroad_reachable)
 
     def alive_hosts(self) -> list[str]:
         """Hosts that responded to at least one probe."""
@@ -151,6 +196,12 @@ def run_scan(
     ``on_result`` is called with ``(ProbeResult, verdict)`` for each completed
     host, enabling a live progress bar. ``hosts`` overrides range expansion
     (used when scanning a pre-discovered alive set).
+
+    After the local latency pass, an independent abroad-reachability pass
+    (check-host.net) runs for up to ``settings.max_global_targets`` hosts,
+    prioritising hosts that answered locally. The two passes are fully
+    decoupled: any failure in the abroad pass is logged and leaves the local
+    results untouched.
     """
     s = settings.clamped()
     targets = hosts if hosts is not None else _prepare_hosts(scope, s)
@@ -171,7 +222,116 @@ def run_scan(
         on_result=_handle,
     )
 
-    return ScanReport(scope=scope, results=results)
+    combined = _run_abroad_pass([p for p, _v in results], s)
+    _run_port_scan(combined, s)
+    return ScanReport(scope=scope, results=results, combined=combined)
+
+
+def _run_abroad_pass(
+    probes: list[ProbeResult], settings: Settings
+) -> list[CombinedResult]:
+    """Enrich local probes with abroad reachability (concurrent, fail-soft).
+
+    Returns a :class:`CombinedResult` per probe, index-aligned with ``probes``.
+    When the abroad check is disabled, or a host is beyond the per-scan cap, or
+    it is non-public, ``abroad_reachable`` stays ``None`` ("not checked").
+    Alive hosts are prioritised for the limited abroad budget.
+    """
+    combined = [CombinedResult(probe=p) for p in probes]
+    if not settings.check_global or settings.max_global_targets <= 0:
+        return combined
+
+    by_host = {c.host: c for c in combined}
+    # Alive-first ordering so the limited abroad budget is spent on hosts that
+    # actually answered locally; de-duplicate by host.
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for want_alive in (True, False):
+        for c in combined:
+            if c.host in seen:
+                continue
+            if c.iran_reachable is want_alive:
+                seen.add(c.host)
+                ordered.append(c.host)
+    chosen = ordered[: settings.max_global_targets]
+
+    timeout = max(_GLOBAL_TIMEOUT_FLOOR, float(settings.timeout))
+    providers = build_providers(getattr(settings, "abroad_provider", "check-host"))
+
+    def _worker(host: str) -> None:
+        try:
+            result = check_abroad(
+                host,
+                providers=providers,
+                timeout=timeout,
+                min_ok_fraction=settings.global_min_ok_fraction,
+            )
+        except Exception as exc:  # noqa: BLE001 - abroad check must never break scan
+            log.warning(
+                "abroad check failed for %s: %s: %s",
+                host,
+                type(exc).__name__,
+                exc,
+            )
+            return
+        c = by_host.get(host)
+        if c is not None:
+            reachable, ok, total, status = _normalize_abroad(result)
+            c.abroad_reachable = reachable
+            c.abroad_nodes_ok = ok
+            c.abroad_nodes_total = total
+            c.abroad_status = status
+
+    workers = max(1, min(settings.concurrency, 8, len(chosen)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(_worker, h) for h in chosen]
+        for _ in as_completed(futures):
+            pass
+
+    return combined
+
+
+def _run_port_scan(combined: list[CombinedResult], settings: Settings) -> None:
+    """Populate ``open_ports`` on each result via a plain TCP-connect scan.
+
+    Fully fail-soft and independent of the latency/abroad passes: only hosts
+    that answered locally are probed (a dead host has nothing to serve), and a
+    connect error against one host or port never aborts the scan. Does nothing
+    when the port scan is disabled or no valid ports are configured.
+    """
+    if not settings.scan_ports:
+        return
+    ports = settings.port_list()
+    if not ports:
+        return
+
+    live = [c for c in combined if c.iran_reachable]
+    if not live:
+        return
+
+    timeout = max(0.5, float(settings.timeout))
+
+    def _worker(c: CombinedResult) -> None:
+        try:
+            c.open_ports = probe_ports(
+                c.host,
+                ports,
+                timeout=timeout,
+                concurrency=max(1, min(len(ports), 16)),
+            )
+        except Exception as exc:  # noqa: BLE001 - port scan must never break a scan
+            log.warning(
+                "port scan failed for %s: %s: %s",
+                c.host,
+                type(exc).__name__,
+                exc,
+            )
+
+    workers = max(1, min(settings.concurrency, 16, len(live)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(_worker, c) for c in live]
+        for _ in as_completed(futures):
+            pass
 
 
 def discover_alive(
@@ -213,12 +373,13 @@ def discover_alive(
 def persist(report: ScanReport, store: HistoryStore | None = None) -> int:
     """Save a scan report to history. Returns the new scan id."""
     store = store or HistoryStore()
-    return store.save_scan(report.scope, report.results)
+    return store.save_scan(report.scope, report.results, combined=report.combined)
 
 
 __all__ = [
     "ScanReport",
     "GroupLatency",
+    "CombinedResult",
     "run_scan",
     "discover_alive",
     "summarize_by_group",

@@ -54,7 +54,7 @@ class PeeringDBSource(Source):
                 self._NET_URL.format(asn=asn_num), timeout=self.context.timeout
             )
         except HTTPError as exc:
-            self.log.debug("PeeringDB net lookup failed for AS%s: %s", asn_num, exc)
+            self._report_request_error(f"PeeringDB net lookup for AS{asn_num}", exc)
             return None
         rows = _rows(data)
         if not rows:
@@ -69,7 +69,7 @@ class PeeringDBSource(Source):
                 self._NETIXLAN_URL.format(asn=asn_num), timeout=self.context.timeout
             )
         except HTTPError as exc:
-            self.log.debug("PeeringDB netixlan failed for AS%s: %s", asn_num, exc)
+            self._report_request_error(f"PeeringDB netixlan for AS{asn_num}", exc)
             return []
         prefixes: list[str] = []
         for row in _rows(data):

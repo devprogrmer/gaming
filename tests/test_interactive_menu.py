@@ -21,6 +21,22 @@ def _isolate_home(tmp_path, monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _no_real_global(monkeypatch):
+    """Keep menu scans offline: stub the abroad (check-host.net) pass.
+
+    ``run_scan`` runs an abroad pass by default (Settings.check_global). Stub it
+    to "not checked" so menu tests never touch the network; tests that exercise
+    bidirectional output override this stub explicitly.
+    """
+    from gaming.interactive import scanner as _scanner
+
+    monkeypatch.setattr(
+        _scanner, "check_abroad", lambda host, **kw: (None, 0, 0)
+    )
+    yield
+
+
 def _run_menu(script: str, store: HistoryStore) -> str:
     stdin = io.StringIO(script)
     stdout = io.StringIO()
@@ -67,6 +83,55 @@ def test_menu_scan_saved_empty_is_friendly(tmp_path):
     # No saved foreign_cdn ranges -> friendly message, no crash.
     out = _run_menu("1\n2\n2\n0\n", store)
     assert "No saved CIDRs for that selection" in out
+
+
+def test_menu_scan_shows_bidirectional_summary(tmp_path, monkeypatch):
+    """A scan surfaces the abroad column + combined reachability summary line."""
+    from gaming.interactive import ranges
+    from gaming.interactive import scanner as scanner_mod
+
+    monkeypatch.setattr(
+        scanner,
+        "scan_hosts",
+        _fake_scan_hosts(lambda h: ProbeResult(h, sent=4, received=4, avg_ms=15.0)),
+    )
+    # Abroad check succeeds -> combined verdict INTERNATIONAL.
+    monkeypatch.setattr(
+        scanner_mod, "check_abroad", lambda host, **kw: (True, 4, 4)
+    )
+    ranges.save_discovered("iran_datacenter", ["185.51.200.0/24"])
+    store = HistoryStore(tmp_path / "h.db")
+    out = _run_menu("1\n1\n1\n0\n", store)
+    assert "INTERNATIONAL" in out  # combined summary line + WHITELIST column
+    assert "ABROAD" in out  # results table gained the abroad column
+    assert "Saved as scan #" in out
+
+
+def test_menu_scan_whitelist_only_export(tmp_path, monkeypatch):
+    """With export_international_only, the bare-IP block keeps only whitelisted IPs."""
+    from gaming.interactive import ranges
+    from gaming.interactive import scanner as scanner_mod
+    from gaming.interactive.settings import Settings, save_settings
+
+    # One host answers abroad (INTERNATIONAL), one does not (IRAN_ONLY).
+    def _probe(h):
+        return ProbeResult(h, sent=4, received=4, avg_ms=15.0)
+
+    def _abroad(host, **kw):
+        return (True, 4, 4) if host.endswith(".1") else (False, 0, 4)
+
+    monkeypatch.setattr(scanner, "scan_hosts", _fake_scan_hosts(_probe))
+    monkeypatch.setattr(scanner_mod, "check_abroad", _abroad)
+
+    save_settings(Settings(export_international_only=True))
+    # A /30 samples two usable hosts (.1 and .2) -> deterministic two-host scan.
+    ranges.save_discovered("iran_datacenter", ["185.9.9.0/30"])
+    store = HistoryStore(tmp_path / "h.db")
+    out = _run_menu("1\n1\n1\n0\n", store)
+    assert "Whitelisted (INTERNATIONAL) IPs" in out
+    export_block = out.split("Whitelisted (INTERNATIONAL) IPs", 1)[-1]
+    assert "185.9.9.1" in export_block  # abroad-OK host kept
+    assert "185.9.9.2" not in export_block  # abroad-FAIL host excluded
 
 
 def test_menu_add_custom_range_flow(tmp_path):
@@ -385,10 +450,14 @@ def _patch_scan(monkeypatch):
 
 def test_menu_discover_saves_all_categories(tmp_path, monkeypatch):
     """Discover & save persists CIDRs across every category, from seed data."""
+    from gaming import pipeline
     from gaming.interactive import ranges
 
-    # No live pipeline needed — bundled seed data alone must aggregate many
-    # providers across all four categories.
+    # Keep the live pipeline offline/deterministic — bundled seed data alone
+    # must aggregate many providers across all four categories.
+    monkeypatch.setattr(pipeline, "discover", lambda *a, **k: [])
+    monkeypatch.setattr(pipeline, "process", lambda recs, *a, **k: list(recs))
+
     store = HistoryStore(tmp_path / "h.db")
     out = _run_menu("2\n0\n", store)
     assert "Saved" in out and "into Manage IP Ranges" in out
@@ -401,7 +470,11 @@ def test_menu_discover_saves_all_categories(tmp_path, monkeypatch):
 
 def test_menu_discovered_ranges_persist_across_instances(tmp_path, monkeypatch):
     """Discovered CIDRs survive after the menu exits (not RAM-only)."""
+    from gaming import pipeline
     from gaming.interactive import ranges
+
+    monkeypatch.setattr(pipeline, "discover", lambda *a, **k: [])
+    monkeypatch.setattr(pipeline, "process", lambda recs, *a, **k: list(recs))
 
     store = HistoryStore(tmp_path / "h.db")
     _run_menu("2\n0\n", store)  # discover & save, then exit
@@ -472,3 +545,123 @@ def test_menu_manage_add_remove_by_category(tmp_path):
     from gaming.interactive import ranges
 
     assert "203.0.113.0/24" in ranges.custom_ranges("iran_cdn")
+
+
+# ---- provider-picker discover -> save -> scan flow (menu option 8) --------
+def test_menu_discover_save_scan_lists_iran_providers(tmp_path, monkeypatch):
+    """Picking Iran shows the real known Iranian providers as a numbered list."""
+    from gaming import pipeline
+
+    # Keep it offline: no live records, seed CIDRs only.
+    monkeypatch.setattr(pipeline, "discover", lambda *a, **k: [])
+    monkeypatch.setattr(pipeline, "process", lambda recs, *a, **k: list(recs))
+    _patch_scan(monkeypatch)
+
+    store = HistoryStore(tmp_path / "h.db")
+    # 8) discover+scan -> origin Iran(1) -> provider "All"(1) -> exit(0)
+    out = _run_menu("8\n1\n1\n0\n", store)
+    # The picker names actual Iranian providers from providers.toml.
+    assert "ArvanCloud CDN" in out
+    assert "Pars Pardazesh Datacenter" in out
+    assert "All providers" in out
+
+
+def test_menu_discover_save_scan_lists_foreign_providers(tmp_path, monkeypatch):
+    from gaming import pipeline
+
+    monkeypatch.setattr(pipeline, "discover", lambda *a, **k: [])
+    monkeypatch.setattr(pipeline, "process", lambda recs, *a, **k: list(recs))
+    _patch_scan(monkeypatch)
+
+    store = HistoryStore(tmp_path / "h.db")
+    # 8) -> origin Foreign(2) -> provider "All"(1) -> exit(0)
+    out = _run_menu("8\n2\n1\n0\n", store)
+    assert "Hetzner Online Hosting" in out
+    assert "Cloudflare" in out
+
+
+def test_menu_discover_save_scan_single_provider_pipeline(tmp_path, monkeypatch):
+    """One specific provider: discover -> auto-save -> scan, one continuous flow."""
+    from gaming import pipeline
+    from gaming.interactive import providers, ranges
+
+    monkeypatch.setattr(pipeline, "discover", lambda *a, **k: [])
+    monkeypatch.setattr(pipeline, "process", lambda recs, *a, **k: list(recs))
+    _patch_scan(monkeypatch)
+
+    # ArvanCloud CDN is the first Iranian provider -> option 2 (after "All").
+    store = HistoryStore(tmp_path / "h.db")
+    out = _run_menu("8\n1\n2\n0\n", store)
+
+    assert "ArvanCloud CDN" in out
+    # The seed CIDRs were auto-persisted into iran_cdn without a manual step.
+    arvan = providers.providers_for_origin("iran")[0]
+    saved = ranges.load_category("iran_cdn")
+    assert any(cidr in saved for cidr in arvan.cidrs)
+    # The flow proceeded straight to a scan and saved it.
+    assert "Scanning" in out
+    assert "Saved as scan #" in out
+    assert len(store.list_scans()) == 1
+
+
+def test_menu_discover_save_scan_persists_and_scans_live_records(tmp_path, monkeypatch):
+    """Live-discovered CIDRs are saved into the right category AND scanned."""
+    from gaming import pipeline
+    from gaming.interactive import ranges
+    from gaming.models import IPRecord
+
+    # Simulate the Part-1 fix producing a real live prefix for the picked ASN.
+    live = [
+        IPRecord(
+            prefix="185.143.240.0/24",
+            source="asn_bgp",
+            asn="AS205585",
+            organization="ArvanCloud",
+            country="IR",
+            provider="arvancloud cdn",
+        )
+    ]
+    monkeypatch.setattr(pipeline, "discover", lambda *a, **k: list(live))
+    monkeypatch.setattr(pipeline, "process", lambda recs, *a, **k: list(recs))
+
+    scanned: list[str] = []
+
+    def _probe(host):
+        scanned.append(host)
+        return ProbeResult(host, sent=4, received=4, avg_ms=12.0)
+
+    monkeypatch.setattr(scanner, "scan_hosts", _fake_scan_hosts(_probe))
+
+    store = HistoryStore(tmp_path / "h.db")
+    out = _run_menu("8\n1\n2\n0\n", store)  # Iran -> ArvanCloud CDN
+
+    # The live CIDR landed in iran_cdn and its hosts were probed.
+    assert "185.143.240.0/24" in ranges.load_category("iran_cdn")
+    assert any(h.startswith("185.143.240.") for h in scanned)
+    assert "Saved as scan #" in out
+
+
+def test_menu_discover_save_scan_seeds_pipeline_with_asns(tmp_path, monkeypatch):
+    """The live pipeline is seeded with the provider's ASNs (Part-1 root fix)."""
+    from gaming import pipeline
+
+    seen: dict = {}
+
+    def _fake_discover(config, filters=None, **kwargs):
+        seen["filters"] = filters
+        seen["timeout"] = kwargs.get("timeout")
+        seen["verbose_errors"] = kwargs.get("verbose_errors")
+        return []
+
+    monkeypatch.setattr(pipeline, "discover", _fake_discover)
+    monkeypatch.setattr(pipeline, "process", lambda recs, *a, **k: list(recs))
+    _patch_scan(monkeypatch)
+
+    store = HistoryStore(tmp_path / "h.db")
+    _run_menu("8\n1\n2\n0\n", store)  # Iran -> ArvanCloud CDN
+
+    # Without seed ASNs every source returns [] and discovery silently falls
+    # back to sample data — so the flow MUST pass the provider's ASN through.
+    assert "AS205585" in seen["filters"].asns
+    assert seen["timeout"] == 15.0  # longer bulk timeout, not the 5s default
+    assert seen["verbose_errors"] is True

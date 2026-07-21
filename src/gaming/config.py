@@ -41,7 +41,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "global_check": {
         "enabled": False,
-        "provider": "check-host.net",
+        "provider": "check-host",  # check-host | ripe-atlas | both
         "max_targets": 10,
     },
 }

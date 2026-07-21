@@ -6,6 +6,160 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-21
+
+### Changed
+- **Refactored `interactive/menu.py` into a thin loop + `actions/` package
+  (Part E).** The `Menu` class now holds only the input loop, prompt/choice
+  plumbing, and dispatch; each action's business logic moved into
+  `interactive/actions/` (`scan`, `discover`, `ranges_action`, `history`,
+  `settings_action`, `filter_octet`, `update_action`, plus shared `common`
+  helpers). Actions take an `ActionContext` (settings, store, print/prompt/choose
+  callables) instead of being bound to the terminal, so the same logic can be
+  driven by a web handler. Purely structural and behaviour-preserving: all
+  existing `test_interactive_menu.py` tests pass unchanged (only the two abroad
+  monkeypatch targets were renamed to `check_abroad` for Part D, not for this
+  refactor). Result formatting stays centralized in `report.py`.
+
+### Added
+- **`docs/architecture.md` (Part G).** A plain-Markdown architecture overview:
+  the discover → process → reachability → report pipeline, how the interactive
+  scanner path differs from the CLI path (the divergence Part A fixed), the
+  current `history.db` SQLite schema (including which columns are nullable /
+  added by migration and why), the `Config`/`Filters` vs. interactive `Settings`
+  split and what each governs, and the Part D abroad-provider abstraction with a
+  step-by-step guide to adding a third provider. Linked from `CONTRIBUTING.md`.
+- **`gaming validate-seed` command + `[meta] last_validated` marker (Part F).**
+  Validates every bundled provider's seed CIDRs against currently-announced
+  prefixes (reusing the `asn_bgp` discovery source) and, unless `--no-marker` is
+  passed, stamps today's date into a new `[meta].last_validated` field in
+  `providers.toml`. It only reports stale-looking CIDRs and updates the marker —
+  it never adds, edits, or deletes a provider entry (the marker rewrite is a
+  line-oriented replace that leaves every `[[provider]]` block byte-for-byte
+  intact). `gaming sources` now prints how stale the seed data is
+  ("seed data last validated: …"). The marker is only stamped when at least one
+  provider was actually reachable, so an offline run never claims a fresh date.
+- **Pluggable abroad-check providers + service-unavailable signal (Part D).**
+  The abroad (international) reachability check is now behind an
+  `AbroadProvider` interface in `reachability/global_check.py`, so it no longer
+  depends on a single third-party service. `CheckHostProvider` wraps the
+  original check-host.net logic unchanged; a new optional `RipeAtlasProvider`
+  (RIPE Atlas one-off ping, API key via `GAMING_RIPE_ATLAS_KEY`) is included
+  only when a key is configured — with none set the tool falls back to
+  check-host.net with no behaviour change. A new `AbroadResult` distinguishes
+  three previously-indistinguishable cases: a real answer (`ok`), a non-public
+  host (`not_applicable`), and a provider outage (`unavailable`) — the last now
+  renders as `unavailable` (terminal + web) and persists via an additive
+  `abroad_status` column, so "check-host.net is down" is visibly different from
+  "this IP isn't internationally reachable". A `global_check.provider` config
+  option and interactive `abroad_provider` Setting choose `check-host`,
+  `ripe-atlas`, or `both`; with `both`, node-ok/node-total counts are summed
+  across providers before applying `min_ok_fraction`, so one provider's outage
+  doesn't decide the verdict. `global_reachability()` is retained as a
+  backward-compatible tuple wrapper.
+- **Recurring scheduled scans + verdict-change alerting (Part C).** A new
+  stdlib `interactive/scheduler.py::ScanScheduler` (a `threading.Thread` +
+  `Event`-gated sleep loop) re-runs a saved scope scan on an interval and
+  appends each run to scan history, feeding the dashboard trend chart without
+  manual re-runs. Exposed as `gaming schedule <scope> --interval N [--count N]`.
+  Each run is fail-soft — one failed scan is logged and the schedule continues.
+  A companion `interactive/alerts.py` diffs the two latest scans of a scope and,
+  when a host flips between the whitelist (`INTERNATIONAL`) and a degraded state
+  (`IRAN_ONLY`/`ABROAD_ONLY`/`UNREACHABLE`), logs the change and — if a webhook
+  URL is configured — POSTs a JSON payload via stdlib `urllib`. Opt-in via two
+  new `Settings` fields (`alert_on_change`, `alert_webhook_url`), off by default.
+- **Broader provider seed data + a `refresh-seeds` re-validation pass (Part C).**
+  `interactive/data/providers.toml` gained ~20 more well-known providers (Linode,
+  Scaleway, Alibaba/Tencent/IBM cloud, netcup, UpCloud, StackPath, CDN77, Gcore,
+  BunnyCDN, Imperva, plus more Iranian datacenters/CDNs — Sindad, MabnaTelecom,
+  Pishgaman, MobinNet, Sabavision, Faraso) using the same
+  `name/category/country/asns/cidrs` schema. New `providers.refresh_seed_data()`
+  and a `gaming refresh-seeds` subcommand re-check every bundled CIDR against the
+  provider's currently-announced prefixes (reusing the existing RIPEstat
+  `asn_bgp` source) and *flag* — never delete — any that look stale. The pass is
+  fully fail-soft: a provider whose lookup fails is reported as unchecked.
+- **Optional common-ports scan in the interactive/web scan path (Part C).**
+  `interactive/scanner.py::run_scan` now runs a plain TCP-connect probe (reusing
+  `reachability/ports.py::probe_ports`) against a configurable preset
+  (`80,443,22,21,25,53,3306,5432,6379,8080,8443` by default) for every host that
+  answered locally, and surfaces the open ports in the terminal and web result
+  tables. Gated by two new `Settings` fields — `scan_ports` (off by default) and
+  `ports` — editable from the Settings menu and the web Settings form. The port
+  scan is fully fail-soft and independent: a connect error never delays or aborts
+  the latency/abroad passes, and dead hosts are skipped.
+- **Local web dashboard (`gaming web`).** A stdlib-only
+  (`http.server`/`ssl`/`secrets`/`hashlib`/`hmac`) dashboard — no new runtime
+  dependency — that reuses the existing pipeline/discovery/reachability/storage
+  modules with zero duplicated business logic. Pages: provider-connectivity
+  home widget, partial-match Search (background discovery job), Live Scan with
+  the bidirectional whitelist view + downloads, History with a dependency-free
+  `<canvas>` trend chart, and Settings (shared `settings.json` with the CLI/menu).
+  - **Auth:** a random username + strong password are generated on first run and
+    printed once; the password is stored only as a salted `pbkdf2_hmac` hash.
+    Signed-cookie sessions (`hmac` + per-install secret), an in-dashboard
+    change-credentials page (confirms current password, rotates the secret to
+    log out all sessions), per-IP login rate limiting, an optional bearer-token
+    mode for automation, and `gaming web --reset-credentials` for recovery.
+  - **Serving:** `--bind` (default `0.0.0.0`), `--port` (default auto-pick a free
+    port in 20000–65000), and `--tls` (cached self-signed cert). Startup prints
+    the URL, detected server IP, and a plain-HTTP-on-`0.0.0.0` security warning.
+  - Static UI (HTML/CSS/JS) bundled via `importlib.resources`; no CDN, no build
+    step, fully offline. Shared `matches_first_octet` / `format_bare_ips` /
+    partial-CIDR search were hoisted into `interactive/filters_shared.py` so the
+    terminal menu and the web layer use one implementation.
+
+- **Bidirectional (Iran + abroad) reachability in the interactive scanner.**
+  Every host scanned from the menu is now checked both locally (Iran→target)
+  and, via check-host.net, from abroad, and gets a combined verdict:
+  `INTERNATIONAL` (reachable both ways — the "whitelist"), `IRAN_ONLY`,
+  `ABROAD_ONLY`, or `UNREACHABLE`. "not checked" (abroad check disabled,
+  skipped, or non-applicable) is shown distinctly, never as a false FAIL.
+  - `global_reachability` now returns `(reachable, nodes_ok, nodes_total)` and
+    takes a `min_ok_fraction` threshold, so a majority of responding nodes —
+    not one lucky node — decides reachability; counts surface in the UI.
+  - The abroad pass runs concurrently and is fully fail-soft: a check-host.net
+    timeout/exception never blocks, delays, or corrupts the local result. It is
+    capped at `max_global_targets` hosts per scan (alive-first) and gated by the
+    new `check_global` Settings toggle (default on for interactive scans).
+  - Results tables (terminal + history) gain `ABROAD` (`OK (n/total)` /
+    `FAIL (n/total)` / `not checked`) and `WHITELIST` (combined verdict) columns,
+    colour-coded; scans print an `International / Iran-only / Abroad-only /
+    Unreachable` summary line. The bare-IP export can be limited to whitelisted
+    (`INTERNATIONAL`) hosts via the `export_international_only` toggle.
+  - Scan history persists the new fields via an additive, idempotent SQLite
+    migration (`ALTER TABLE results ADD COLUMN ...`), so existing `history.db`
+    files load unchanged and pre-migration rows read back as "not checked".
+
+### Fixed
+- **Live discovery no longer silently falls back to sample data.** The
+  interactive "Discover & save provider ranges" flow now seeds the pipeline
+  with the bundled providers' ASNs/countries; without seeds every source
+  early-returned nothing and the pipeline swapped in the 12-record sample set.
+  A seeded run now returns thousands of real, current prefixes across all
+  sources. Two contributing causes were fixed: the bulk discovery pass uses a
+  longer 15s per-request timeout (RIPEstat/WHOIS routinely exceed the 5s ad-hoc
+  default), and the WHOIS source caps how much of a `-i origin` dump it reads
+  (a single large transit AS returned ~16 MB / 20+ s and always timed out).
+- **Per-request error visibility.** `DiscoveryContext.verbose_errors` (set by
+  the interactive discovery pass) surfaces each failed per-ASN/per-source
+  request at WARNING with its real exception *type* and message instead of a
+  terse DEBUG "failed", so a genuine DNS/refused/timeout/TLS/HTTP/parse cause is
+  no longer masked as a generic sample-data fallback. `pipeline.discover` gained
+  `timeout` and `verbose_errors` overrides.
+
+### Added
+- **Targeted "Discover, save & scan a provider" flow** (menu option 8): pick an
+  origin (Iran / Foreign), then a specific known provider from a numbered list
+  built from `providers.toml` (Pars Pardazesh, Asiatech, ArvanCloud, Hetzner,
+  OVH, DigitalOcean, Cloudflare, Fastly, …) or "All". The chosen provider is
+  discovered live (seeded by its ASNs), its newly discovered CIDRs are persisted
+  into the correct Manage IP Ranges category automatically, and its hosts are
+  scanned immediately — discover → save → scan as one continuous flow with no
+  intermediate prompts. The existing "Scan saved ranges" and "Manage IP ranges"
+  menus are unchanged.
+- `providers.load_providers()` / `providers_for_origin()` and a `Provider`
+  dataclass backing the provider picker.
+
 ## [0.4.0] - 2026-07-17
 
 ### Added
@@ -112,6 +266,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - CLI subcommands: `sources`, `discover`, `check`, `run`.
 - Test suite (52 tests, fully offline) and packaging for distribution.
 
-[Unreleased]: https://github.com/devprogrmer/gaming/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/devprogrmer/gaming/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/devprogrmer/gaming/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/devprogrmer/gaming/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/devprogrmer/gaming/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/devprogrmer/gaming/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/devprogrmer/gaming/releases/tag/v0.1.0

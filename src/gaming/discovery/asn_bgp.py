@@ -29,7 +29,7 @@ class ASNBGPSource(Source):
             try:
                 data = get_json(url, timeout=self.context.timeout)
             except HTTPError as exc:
-                self.log.debug("RIPEstat query failed for %s: %s", seed, exc)
+                self._report_request_error(f"RIPEstat query for {seed}", exc)
                 continue
             prefixes = (data.get("data") or {}).get("prefixes") or []
             for entry in prefixes:

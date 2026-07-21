@@ -72,7 +72,7 @@ class RDAPSource(Source):
                 self._RDAP_AUTNUM.format(asn=asn_num), timeout=self.context.timeout
             )
         except HTTPError as exc:
-            self.log.debug("RDAP autnum lookup failed for AS%s: %s", asn_num, exc)
+            self._report_request_error(f"RDAP autnum lookup for AS{asn_num}", exc)
             return None, None
         return self._parse_autnum(data)
 
@@ -108,7 +108,7 @@ class RDAPSource(Source):
                 self._PREFIXES_URL.format(asn=asn_num), timeout=self.context.timeout
             )
         except HTTPError as exc:
-            self.log.debug("RIPEstat prefixes failed for AS%s: %s", asn_num, exc)
+            self._report_request_error(f"RIPEstat prefixes for AS{asn_num}", exc)
             return []
         prefixes = (data.get("data") or {}).get("prefixes") or []
         return [p["prefix"] for p in prefixes if isinstance(p, dict) and p.get("prefix")]

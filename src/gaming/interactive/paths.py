@@ -52,3 +52,18 @@ def settings_path() -> Path:
 def custom_ranges_path() -> Path:
     """Path to the user's custom IP ranges file (one CIDR per line)."""
     return app_home() / "custom_ranges.txt"
+
+
+def credentials_path() -> Path:
+    """Path to the web dashboard's credential/session-secret store (JSON)."""
+    return app_home() / "web_credentials.json"
+
+
+def tls_cert_path() -> Path:
+    """Path to the cached self-signed TLS certificate for the dashboard."""
+    return app_home() / "web_cert.pem"
+
+
+def tls_key_path() -> Path:
+    """Path to the cached self-signed TLS private key for the dashboard."""
+    return app_home() / "web_key.pem"

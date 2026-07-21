@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from gaming.discovery import build_source
+from gaming.discovery.asn_bgp import ASNBGPSource
 from gaming.discovery.base import DiscoveryContext
 from gaming.discovery.peeringdb import PeeringDBSource
 from gaming.discovery.rdap import RDAPSource, _vcard_field
@@ -19,6 +20,15 @@ from gaming.models import Filters
 
 def _ctx(**filter_kwargs) -> DiscoveryContext:
     return DiscoveryContext(filters=Filters(**filter_kwargs), timeout=1.0, offline=False)
+
+
+def _ctx_verbose(**filter_kwargs) -> DiscoveryContext:
+    return DiscoveryContext(
+        filters=Filters(**filter_kwargs),
+        timeout=1.0,
+        offline=False,
+        verbose_errors=True,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -218,3 +228,81 @@ def test_offline_mode_uses_samples(name):
     src = build_source(name, ctx)
     records = src.discover()
     assert records and all(r.source == name for r in records)
+
+
+# --------------------------------------------------------------------------
+# Per-request error visibility (verbose_errors / --log-level DEBUG)
+# --------------------------------------------------------------------------
+def test_verbose_errors_surface_real_exception_at_warning(monkeypatch, caplog):
+    """With verbose_errors, a per-ASN failure logs its real type at WARNING."""
+    from gaming.utils.http import HTTPError
+
+    src = ASNBGPSource(_ctx_verbose(asns=["AS13335"]))
+
+    def boom(url, **kw):
+        raise HTTPError("HTTP Error 404: Not Found")
+
+    monkeypatch.setattr("gaming.discovery.asn_bgp.get_json", boom)
+    with caplog.at_level("WARNING", logger="gaming.discovery.asn_bgp"):
+        assert src._discover_online() == []
+    # The real exception type AND message are surfaced, not just "failed".
+    assert any(
+        rec.levelname == "WARNING" and "HTTPError" in rec.getMessage()
+        and "404" in rec.getMessage()
+        for rec in caplog.records
+    )
+
+
+def test_quiet_errors_stay_at_debug(monkeypatch, caplog):
+    """Without verbose_errors, the same failure stays a terse DEBUG line."""
+    from gaming.utils.http import HTTPError
+
+    src = ASNBGPSource(_ctx(asns=["AS13335"]))
+    monkeypatch.setattr(
+        "gaming.discovery.asn_bgp.get_json",
+        lambda url, **kw: (_ for _ in ()).throw(HTTPError("boom")),
+    )
+    with caplog.at_level("DEBUG", logger="gaming.discovery.asn_bgp"):
+        assert src._discover_online() == []
+    assert not any(rec.levelname == "WARNING" for rec in caplog.records)
+    assert any(rec.levelname == "DEBUG" for rec in caplog.records)
+
+
+# --------------------------------------------------------------------------
+# WHOIS response-size cap (guards against multi-MB / multi-minute dumps)
+# --------------------------------------------------------------------------
+def test_whois_raw_query_caps_response(monkeypatch):
+    """_raw_query stops reading once the byte cap is reached (no unbounded drain)."""
+    src = WhoisSource(_ctx(asns=["AS13335"]))
+    src._MAX_RESPONSE_BYTES = 8192  # small cap for the test
+
+    chunk = b"route: 185.51.200.0/22\n" * 512  # ~11 KB per recv
+
+    class _FakeSock:
+        def __init__(self):
+            self.recv_calls = 0
+
+        def sendall(self, data):
+            pass
+
+        def settimeout(self, t):
+            pass
+
+        def recv(self, n):
+            self.recv_calls += 1
+            return chunk  # never returns b"" -> only the cap can stop the loop
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    fake = _FakeSock()
+    monkeypatch.setattr(
+        "gaming.discovery.whois.socket.create_connection", lambda *a, **k: fake
+    )
+    body = src._raw_query("-i origin AS13335")
+    # The loop stopped at the cap rather than draining forever.
+    assert fake.recv_calls == 1
+    assert len(body.encode("utf-8", "replace")) <= len(chunk)

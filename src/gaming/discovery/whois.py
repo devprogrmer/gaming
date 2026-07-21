@@ -19,6 +19,12 @@ class WhoisSource(Source):
 
     _WHOIS_HOST = "whois.radb.net"
     _WHOIS_PORT = 43
+    # An inverse ``-i origin`` query against a big transit AS can return tens of
+    # megabytes (AS13335 alone is ~16 MB / 20+ s over a slow link), which blows
+    # past any sane timeout and starves the rest of the pass. Cap how much we
+    # read: the first chunk of ``route:`` objects is a representative sample and
+    # the socket is closed early rather than draining the whole dump.
+    _MAX_RESPONSE_BYTES = 2_000_000
 
     def _discover_online(self) -> list[IPRecord]:
         seeds = self.context.filters.asns
@@ -31,7 +37,7 @@ class WhoisSource(Source):
             try:
                 response = self._raw_query(f"-i origin {asn}")
             except OSError as exc:
-                self.log.debug("WHOIS query failed for %s: %s", asn, exc)
+                self._report_request_error(f"WHOIS query for {asn}", exc)
                 continue
             records.extend(self._parse_routes(response, asn))
         return records
@@ -40,13 +46,16 @@ class WhoisSource(Source):
         with socket.create_connection(
             (self._WHOIS_HOST, self._WHOIS_PORT), timeout=self.context.timeout
         ) as sock:
+            sock.settimeout(self.context.timeout)
             sock.sendall(f"{query}\r\n".encode())
             chunks: list[bytes] = []
-            while True:
+            received = 0
+            while received < self._MAX_RESPONSE_BYTES:
                 data = sock.recv(4096)
                 if not data:
                     break
                 chunks.append(data)
+                received += len(data)
         return b"".join(chunks).decode("utf-8", errors="replace")
 
     def _parse_routes(self, response: str, asn: str) -> list[IPRecord]:

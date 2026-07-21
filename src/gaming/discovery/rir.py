@@ -29,7 +29,7 @@ class RIRSource(Source):
         try:
             body = get_text(self._DELEGATED, timeout=self.context.timeout)
         except HTTPError as exc:
-            self.log.debug("RIR delegated fetch failed: %s", exc)
+            self._report_request_error("RIR delegated fetch", exc)
             return []
         return list(self._parse_delegated(body, countries))
 

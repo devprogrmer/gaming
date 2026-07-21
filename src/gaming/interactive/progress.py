@@ -15,13 +15,30 @@ import os
 import sys
 from typing import TextIO
 
-from .classify import BAD, GOOD, MEDIUM
+from .classify import (
+    ABROAD_ONLY,
+    BAD,
+    GOOD,
+    INTERNATIONAL,
+    IRAN_ONLY,
+    MEDIUM,
+    UNREACHABLE,
+)
 
 _RESET = "\033[0m"
+_GREEN = "\033[32m"
+_YELLOW = "\033[33m"
+_RED = "\033[31m"
+_GRAY = "\033[90m"
 _COLORS = {
-    GOOD: "\033[32m",  # green
-    MEDIUM: "\033[33m",  # yellow
-    BAD: "\033[31m",  # red
+    GOOD: _GREEN,
+    MEDIUM: _YELLOW,
+    BAD: _RED,
+    # Combined (bidirectional) verdicts.
+    INTERNATIONAL: _GREEN,
+    IRAN_ONLY: _YELLOW,
+    ABROAD_ONLY: _YELLOW,
+    UNREACHABLE: _RED,
 }
 
 

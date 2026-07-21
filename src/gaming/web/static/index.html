@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>gaming · dashboard</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <!-- Login view -->
+  <div id="login-view" class="login-view hidden">
+    <form id="login-form" class="login-card" autocomplete="off">
+      <h1 class="brand">gaming</h1>
+      <p class="muted">IP reachability dashboard</p>
+      <label>Username <input id="login-user" name="username" autocomplete="username" /></label>
+      <label>Password <input id="login-pass" name="password" type="password" autocomplete="current-password" /></label>
+      <button type="submit">Sign in</button>
+      <p id="login-error" class="error"></p>
+    </form>
+  </div>
+
+  <!-- App shell -->
+  <div id="app-view" class="app-view hidden">
+    <aside class="sidebar">
+      <div class="brand-row"><span class="brand">gaming</span></div>
+      <nav>
+        <a href="#home" class="nav-link" data-view="home">Home</a>
+        <a href="#search" class="nav-link" data-view="search">Search</a>
+        <a href="#scan" class="nav-link" data-view="scan">Live Scan</a>
+        <a href="#history" class="nav-link" data-view="history">History</a>
+        <a href="#settings" class="nav-link" data-view="settings">Settings</a>
+      </nav>
+      <div class="sidebar-foot">
+        <span id="whoami" class="muted"></span>
+        <button id="logout-btn" class="link-btn">Sign out</button>
+      </div>
+    </aside>
+
+    <main class="content">
+      <!-- Home -->
+      <section id="view-home" class="view">
+        <h2>Provider connectivity <span class="muted">(latest scan)</span></h2>
+        <p class="muted">Fraction of each provider's probed ranges currently reachable internationally from Iran.</p>
+        <div id="summary-panel" class="cards"></div>
+      </section>
+
+      <!-- Search -->
+      <section id="view-search" class="view hidden">
+        <h2>Search ranges</h2>
+        <div class="controls">
+          <input id="q-query" placeholder="CIDR / octet, e.g. 85" />
+          <input id="q-provider" placeholder="provider" />
+          <input id="q-country" placeholder="country (IR)" />
+          <input id="q-asn" placeholder="ASN" />
+          <button id="search-btn">Search</button>
+        </div>
+        <p id="search-status" class="muted"></p>
+        <div class="table-wrap"><table id="search-table"></table></div>
+      </section>
+
+      <!-- Live Scan -->
+      <section id="view-scan" class="view hidden">
+        <h2>Live scan / whitelist</h2>
+        <div class="controls">
+          <select id="scan-category">
+            <option value="iran_datacenter">iran_datacenter</option>
+            <option value="iran_cdn">iran_cdn</option>
+            <option value="foreign_datacenter">foreign_datacenter</option>
+            <option value="foreign_cdn">foreign_cdn</option>
+          </select>
+          <button id="scan-btn">Scan saved ranges</button>
+          <label class="chk"><input type="checkbox" id="whitelist-only" /> whitelist only</label>
+          <button id="dl-whitelist" class="secondary" disabled>Download whitelist IPs</button>
+        </div>
+        <p id="scan-status" class="muted"></p>
+        <div id="scan-counts" class="counts"></div>
+        <div class="table-wrap"><table id="scan-table"></table></div>
+      </section>
+
+      <!-- History -->
+      <section id="view-history" class="view hidden">
+        <h2>Scan history</h2>
+        <canvas id="trend-chart" width="720" height="180"></canvas>
+        <div class="table-wrap"><table id="history-table"></table></div>
+        <h3 id="history-detail-title" class="hidden">Scan detail</h3>
+        <div class="controls hidden" id="history-detail-controls">
+          <button id="dl-csv" class="secondary">Download CSV</button>
+          <button id="dl-json" class="secondary">Download JSON</button>
+        </div>
+        <div class="table-wrap"><table id="history-detail-table"></table></div>
+      </section>
+
+      <!-- Settings -->
+      <section id="view-settings" class="view hidden">
+        <h2>Settings</h2>
+        <form id="settings-form" class="settings-grid"></form>
+        <button id="save-settings" class="secondary">Save settings</button>
+        <p id="settings-status" class="muted"></p>
+
+        <h3>Change credentials</h3>
+        <form id="cred-form" class="settings-grid" autocomplete="off">
+          <label>Current password <input id="cur-pass" type="password" /></label>
+          <label>New username <input id="new-user" /></label>
+          <label>New password <input id="new-pass" type="password" /></label>
+        </form>
+        <button id="save-creds" class="secondary">Update credentials</button>
+        <p id="cred-status" class="muted"></p>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
