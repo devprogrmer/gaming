@@ -1,0 +1,53 @@
+# systemd service unit for the gaming web dashboard.
+#
+# This is a REFERENCE template — it is NOT installed automatically. Use it when
+# you want the dashboard to survive reboots and auto-restart on crash (the more
+# robust, production-grade alternative to `gaming web --daemon`).
+#
+# Setup:
+#   1. Install gaming for the service user (e.g. via ./install.sh), and note the
+#      launcher path — either the repo's ./gaming or the venv's binary, e.g.
+#      /opt/gaming/.venv/bin/gaming.
+#   2. Copy this file to /etc/systemd/system/gaming-web.service and edit User,
+#      ExecStart (path + bind/port), and any environment overrides below.
+#   3. Reload and enable:
+#        sudo systemctl daemon-reload
+#        sudo systemctl enable --now gaming-web
+#   4. First-run credentials are printed to the journal:
+#        sudo journalctl -u gaming-web --no-pager | grep -A6 'web dashboard'
+#      (or run `gaming web --reset-credentials` once in the foreground to set them).
+#
+# Security note: bind to 127.0.0.1 and reach it over an SSH tunnel, or use --tls,
+# rather than exposing plain HTTP on 0.0.0.0. --daemon and this unit only change
+# process lifetime, never the default bind/auth behavior.
+
+[Unit]
+Description=gaming web dashboard (IP discovery + reachability)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Run as a dedicated non-root user that owns the gaming app-data directory.
+User=gaming
+Group=gaming
+
+# Adjust the launcher path and flags to your install. Do NOT pass --daemon here:
+# systemd manages the process lifecycle itself and expects it to stay foreground.
+ExecStart=/opt/gaming/.venv/bin/gaming web --bind 127.0.0.1 --port 8787
+
+Restart=on-failure
+RestartSec=5s
+
+# Point GAMING_HOME at the persistent app-data dir the service user owns, so the
+# credential store, history DB, and settings live in a stable location.
+Environment=GAMING_HOME=/var/lib/gaming
+
+# Light hardening (optional; relax if it interferes with your setup).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

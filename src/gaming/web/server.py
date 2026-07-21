@@ -14,6 +14,7 @@ No third-party dependency.
 
 from __future__ import annotations
 
+import os
 import secrets
 import socket
 import ssl
@@ -175,12 +176,17 @@ def serve(
     port: int | None = None,
     use_tls: bool = False,
     reset_credentials: bool = False,
+    daemon: bool = False,
     print_fn=print,
 ) -> int:
     """Start the dashboard and block serving requests. Returns an exit code.
 
     On first run (or ``reset_credentials``) the generated username/password are
     printed exactly once. ``print_fn`` is injectable for testing.
+
+    When ``daemon`` is set, the process detaches from the controlling terminal
+    after the credentials/URL banner is printed (so the user still sees the
+    one-time password) and writes a PID file for ``--stop`` / ``--status``.
     """
     creds_store = CredentialStore()
     if reset_credentials:
@@ -211,12 +217,31 @@ def serve(
     server_ip = _detect_server_ip()
     _print_startup(print_fn, scheme, bind, port, server_ip, creds.username, password)
 
+    if daemon:
+        # Detach only AFTER the banner (with the one-time password) is printed,
+        # so the user always sees the credentials before the process goes to the
+        # background and its output is redirected to the log file.
+        from . import daemon as daemon_mod
+
+        try:
+            daemon_mod.daemonize()
+        except daemon_mod.DaemonError as exc:
+            print_fn(f"Cannot daemonize: {exc}")
+            httpd.server_close()
+            return 1
+        # We are now the detached grandchild; record our PID for --stop/--status.
+        daemon_mod.write_pid(os.getpid())
+
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         print_fn("\nShutting down dashboard.")
     finally:
         httpd.server_close()
+        if daemon:
+            from . import daemon as daemon_mod
+
+            daemon_mod.remove_pid()
     return 0
 
 

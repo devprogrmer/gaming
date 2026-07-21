@@ -67,3 +67,13 @@ def tls_cert_path() -> Path:
 def tls_key_path() -> Path:
     """Path to the cached self-signed TLS private key for the dashboard."""
     return app_home() / "web_key.pem"
+
+
+def web_pid_path() -> Path:
+    """Path to the PID file for a daemonized ``gaming web`` process."""
+    return app_home() / "web.pid"
+
+
+def web_log_path() -> Path:
+    """Path to the log file a daemonized ``gaming web`` redirects output to."""
+    return app_home() / "web.log"

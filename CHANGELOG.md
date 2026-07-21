@@ -6,6 +6,64 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-22
+
+### Fixed
+- **`gaming web` no longer dies when the SSH session or terminal closes.**
+  Previously the dashboard only stayed up as long as the terminal that launched
+  it stayed open — disconnecting SSH killed the process and took the panel down.
+  `gaming web` now accepts `--daemon`/`-d` to detach from the controlling
+  terminal (POSIX double-fork + `setsid`), redirect its output to `web.log` in
+  the app-data directory, and write a `web.pid` file; the one-time credentials
+  are still printed to the console before it goes to the background. Two new
+  lifecycle commands manage it without hunting for the process: `gaming web
+  --status` (is it running, and since when) and `gaming web --stop` (graceful
+  `SIGTERM`, escalating to `SIGKILL`). `--daemon` changes only whether the
+  process survives disconnection — never the default bind or auth behavior. A
+  reference `packaging/gaming-web.service` systemd unit is shipped (not
+  auto-installed) for the more robust "survives reboot, auto-restarts on crash"
+  setup, and both options are documented in the README. On Windows (no
+  `os.fork`), `--daemon` fails loudly and points at the alternatives.
+
+- **Iran-scoped scans no longer leak non-Iranian-located results.** Choosing an
+  "Iran" origin (the interactive provider picker's Iran branch, "Scan saved
+  ranges" with origin Iran, or the web dashboard's Iranian-category scan) selects
+  CIDRs by their provider/ASN classification — which can attach a foreign-located
+  range (an Iranian CDN's overseas PoP, an anycast edge, or a record whose
+  registered country differs from where the prefix actually resolves) to an
+  Iranian provider. Those Iran-origin paths now treat the record's country as the
+  authoritative location signal and keep only ranges verified as `IR`. Anything
+  with a missing or non-IR country is excluded from the Iran-only set and listed
+  separately as "location unverified" rather than silently scanned as Iranian or
+  silently dropped. (The `--country IR` CLI path already filtered strictly on the
+  country field and was unaffected.)
+- **"Filter CIDRs by first octet" → "All datacenters" no longer returns 0 when
+  matching CIDRs exist.** With RIR-sourced records (e.g. `--country IR`
+  discovery), every record carries only a country — no organization or provider
+  text — so the datacenter classifier, which keys off that text, ruled every
+  record out and the combined octet + "all datacenters" filter collapsed to zero
+  for any octet (212, 85, 78, …). The octet match is now reported on its own
+  ("N of M records match octet X") before any datacenter narrowing, and the "all
+  datacenters" step splits results into three labelled buckets — classified
+  datacenters, records with no provider metadata to classify (surfaced as
+  "unclassified", not dropped), and records positively ruled out — so real
+  matching ranges stay visible and scannable even when there's nothing to
+  classify them by.
+- **`./gaming` launcher could silently end up as a broken/missing command.** On a
+  real server, `./gaming web` (and other subcommands) failed with
+  `-bash: ./gaming: Is a directory` because a `gaming` **directory** already sat
+  where the launcher file should be written (e.g. a checkout where `src/gaming/`
+  was extracted alongside, or a leftover from a partial install), so the
+  installer's `cat > gaming` redirect failed and left no working launcher. The
+  installers (`install.sh`, `install.ps1`) now detect this up front and stop with
+  an explicit message telling you exactly what is blocking the launcher and how to
+  fix it, fail loudly if the launcher can't be written for any other reason
+  (permissions, disk), and run a post-install self-check (`gaming --version`) so a
+  broken install is caught immediately instead of when you first try `gaming web`.
+  A new test covers the `gaming web` startup path (credentials + bound URL are
+  printed and the server actually starts), and `CONTRIBUTING.md` documents the
+  manual launcher verification steps.
+
 ## [0.5.0] - 2026-07-21
 
 ### Changed

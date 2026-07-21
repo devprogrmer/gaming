@@ -68,7 +68,10 @@ def test_menu_scan_saved_persists(tmp_path, monkeypatch):
     from gaming.interactive import ranges
 
     # Seed a saved category so there is something to scan.
-    ranges.save_discovered("iran_datacenter", ["185.51.200.0/22"])
+    ranges.save_discovered(
+        "iran_datacenter", ["185.51.200.0/22"],
+        metadata={"185.51.200.0/22": ("IR", "pars")},
+    )
     store = HistoryStore(tmp_path / "h.db")
     # 1) scan saved -> origin Iran(1) -> class Datacenter(1) -> 0) exit.
     out = _run_menu("1\n1\n1\n0\n", store)
@@ -99,7 +102,10 @@ def test_menu_scan_shows_bidirectional_summary(tmp_path, monkeypatch):
     monkeypatch.setattr(
         scanner_mod, "check_abroad", lambda host, **kw: (True, 4, 4)
     )
-    ranges.save_discovered("iran_datacenter", ["185.51.200.0/24"])
+    ranges.save_discovered(
+        "iran_datacenter", ["185.51.200.0/24"],
+        metadata={"185.51.200.0/24": ("IR", "pars")},
+    )
     store = HistoryStore(tmp_path / "h.db")
     out = _run_menu("1\n1\n1\n0\n", store)
     assert "INTERNATIONAL" in out  # combined summary line + WHITELIST column
@@ -125,13 +131,58 @@ def test_menu_scan_whitelist_only_export(tmp_path, monkeypatch):
 
     save_settings(Settings(export_international_only=True))
     # A /30 samples two usable hosts (.1 and .2) -> deterministic two-host scan.
-    ranges.save_discovered("iran_datacenter", ["185.9.9.0/30"])
+    ranges.save_discovered(
+        "iran_datacenter", ["185.9.9.0/30"],
+        metadata={"185.9.9.0/30": ("IR", "pars")},
+    )
     store = HistoryStore(tmp_path / "h.db")
     out = _run_menu("1\n1\n1\n0\n", store)
     assert "Whitelisted (INTERNATIONAL) IPs" in out
     export_block = out.split("Whitelisted (INTERNATIONAL) IPs", 1)[-1]
     assert "185.9.9.1" in export_block  # abroad-OK host kept
     assert "185.9.9.2" not in export_block  # abroad-FAIL host excluded
+
+
+def test_menu_scan_saved_iran_excludes_non_ir_located(tmp_path, monkeypatch):
+    """Regression: an Iran-origin scan of saved ranges must only scan CIDRs
+    verified as IR-located, not foreign CIDRs saved under an Iranian category.
+
+    An Iranian CDN's overseas PoP (or a record whose registered ASN is Iranian
+    but whose prefix geolocates abroad) gets saved into an Iran category with a
+    non-IR country. The scan must drop it into a "location unverified" bucket
+    instead of leaking it into the Iranian result set.
+    """
+    scanned: list[str] = []
+
+    def _probe(host):
+        scanned.append(host)
+        return ProbeResult(host, sent=4, received=4, avg_ms=15.0)
+
+    monkeypatch.setattr(scanner, "scan_hosts", _fake_scan_hosts(_probe))
+    from gaming.interactive import ranges
+
+    # Mixed saved data under the Iranian datacenter category:
+    ranges.save_discovered(
+        "iran_datacenter",
+        ["185.51.200.0/24", "5.5.5.0/24", "9.9.9.0/24"],
+        metadata={
+            "185.51.200.0/24": ("IR", "pars"),      # genuinely Iranian
+            "5.5.5.0/24": ("DE", "arvancloud"),      # Iranian org, foreign PoP
+            "9.9.9.0/24": (None, "someprovider"),    # ambiguous, no country
+        },
+    )
+    store = HistoryStore(tmp_path / "h.db")
+    # 1) scan saved -> origin Iran(1) -> class Datacenter(1) -> exit
+    out = _run_menu("1\n1\n1\n0\n", store)
+
+    # The two non-IR-located CIDRs are surfaced as excluded, not silently dropped.
+    assert "not verified as located in Iran" in out
+    assert "5.5.5.0/24" in out
+    assert "9.9.9.0/24" in out
+    # Only the genuinely-Iranian CIDR was actually probed.
+    assert any(h.startswith("185.51.200.") for h in scanned)
+    assert not any(h.startswith("5.5.5.") for h in scanned)
+    assert not any(h.startswith("9.9.9.") for h in scanned)
 
 
 def test_menu_add_custom_range_flow(tmp_path):
@@ -154,7 +205,10 @@ def test_menu_history_view(tmp_path, monkeypatch):
     )
     from gaming.interactive import ranges
 
-    ranges.save_discovered("iran_datacenter", ["185.51.200.0/22"])
+    ranges.save_discovered(
+        "iran_datacenter", ["185.51.200.0/22"],
+        metadata={"185.51.200.0/22": ("IR", "pars")},
+    )
     store = HistoryStore(tmp_path / "h.db")
     # scan saved (Iran/DC), then open history(4), view scan #1, then exit.
     out = _run_menu("1\n1\n1\n4\n1\n0\n", store)
@@ -244,13 +298,23 @@ def test_menu_filter_by_first_octet_flow(tmp_path, monkeypatch):
     ]
     monkeypatch.setattr(pipeline, "discover", lambda *a, **k: list(records))
     monkeypatch.setattr(pipeline, "process", lambda recs, *a, **k: list(recs))
+    monkeypatch.setattr(
+        scanner,
+        "scan_hosts",
+        _fake_scan_hosts(lambda h: ProbeResult(h, sent=4, received=4, avg_ms=15.0)),
+    )
 
     store = HistoryStore(tmp_path / "h.db")
     # 7) filter -> octets "185" -> 1) all datacenters -> blank country -> 0) exit
     out = _run_menu("7\n185\n1\n\n0\n", store)
     assert "first octet [185]" in out
-    # Neither record has datacenter-ish org text, so "all datacenters" yields none.
-    assert "(none)" in out
+    # The octet count is reported independently of datacenter classification.
+    assert "1 of 2 discovered record(s) match first octet [185]" in out
+    # Neither record has org/provider text, so it can't be classified — but the
+    # matching CIDR must still be surfaced as "unclassified", not dropped to zero.
+    assert "0 classified as datacenters" in out
+    assert "1 unclassified" in out
+    assert "185.51.200.0/22" in out
 
 
 def test_menu_filter_by_first_octet_all_datacenters(tmp_path, monkeypatch):
@@ -279,16 +343,66 @@ def test_menu_filter_by_first_octet_all_datacenters(tmp_path, monkeypatch):
     store = HistoryStore(tmp_path / "h.db")
     # octets "185" -> 1) all datacenters -> blank country
     out = _run_menu("7\n185\n1\n\n0\n", store)
-    assert "all datacenters" in out
-    # Only the datacenter/hosting/cloud org with first octet 185 survives.
+    assert "classified as datacenters" in out
+    # The datacenter/hosting/cloud org with first octet 185 is classified as such.
     assert "185.51.200.0/22" in out
-    assert "185.99.1.0/24" not in out  # first octet matches but not a datacenter
+    # "Some ISP" has org text but no datacenter keyword -> classified "not datacenter".
+    assert "1 not datacenters" in out
     assert "8.8.8.0/24" not in out  # datacenter but wrong first octet
     # Auto-scan phase ran and kept the (located, GOOD) host.
     assert "strict GOOD only" in out
     assert "meet both strict reachability" in out
     assert "Saved as scan #" in out
     assert len(store.list_scans()) == 1
+
+
+def test_menu_filter_octet_rir_records_no_org_surface_as_unclassified(
+    tmp_path, monkeypatch
+):
+    """Regression: RIR-sourced records (country only, no org/provider) must not
+    vanish behind the "all datacenters" filter.
+
+    This reproduces the real-world report: discovering --country IR returns
+    RIRSource records with organization=None and provider=None, and filtering by
+    a matching first octet with "all datacenters" returned 0 every time. The
+    octet-only match count must be surfaced, and the matching CIDRs shown in the
+    "unclassified" bucket instead of being silently dropped.
+    """
+    from gaming import pipeline
+    from gaming.models import IPRecord
+
+    # Exactly what RIRSource._discover_online yields: org/provider both None.
+    records = [
+        IPRecord(prefix="212.1.0.0/16", source="rir", country="IR",
+                 organization=None, provider=None, notes="RIR delegated allocation"),
+        IPRecord(prefix="212.2.0.0/16", source="rir", country="IR",
+                 organization=None, provider=None),
+        IPRecord(prefix="85.9.0.0/16", source="rir", country="IR",
+                 organization=None, provider=None),
+    ]
+    monkeypatch.setattr(pipeline, "discover", lambda *a, **k: list(records))
+    monkeypatch.setattr(pipeline, "process", lambda recs, *a, **k: list(recs))
+    monkeypatch.setattr(
+        scanner,
+        "scan_hosts",
+        _fake_scan_hosts(lambda h: ProbeResult(h, sent=4, received=4, avg_ms=15.0)),
+    )
+
+    store = HistoryStore(tmp_path / "h.db")
+    # 7) filter -> octets "212" -> 1) all datacenters -> blank country -> exit
+    out = _run_menu("7\n212\n1\n\n0\n", store)
+
+    # The octet match is non-zero and reported independently of classification.
+    assert "2 of 3 discovered record(s) match first octet [212]" in out
+    # None can be classified (no org/provider) -> all land in the unclassified
+    # bucket, NOT dropped to a misleading zero.
+    assert "0 classified as datacenters" in out
+    assert "2 unclassified" in out
+    assert "212.1.0.0/16" in out
+    assert "212.2.0.0/16" in out
+    assert "85.9.0.0/16" not in out  # wrong octet
+    # The unclassified CIDRs are still actionable: they reach the auto-scan.
+    assert "Auto-scanning" in out
 
 
 def test_menu_filter_by_first_octet_specific_provider(tmp_path, monkeypatch):

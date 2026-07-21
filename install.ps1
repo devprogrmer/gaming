@@ -69,9 +69,40 @@ Write-Host "Installing gaming ..."
 
 # ---- create a convenient launcher ----------------------------------------
 $Launcher = Join-Path $RepoDir "gaming.cmd"
-$launcherBody = "@echo off`r`n""$VenvPy"" -m gaming %*`r`n"
-Set-Content -Path $Launcher -Value $launcherBody -Encoding ASCII
+
+# Fail loudly if a directory is already occupying the launcher path (a stale or
+# partial install, or a checkout with a 'gaming.cmd' folder alongside), instead
+# of silently leaving a broken/missing launcher.
+if (Test-Path $Launcher -PathType Container) {
+    Write-Error @"
+A directory named 'gaming.cmd' already exists here:
+    $Launcher
+It is blocking creation of the launcher. Remove that directory if it is not
+needed, or run this installer from a clean, dedicated directory that does not
+already contain a 'gaming.cmd' file or folder, then re-run it.
+"@
+    exit 1
+}
+
+try {
+    $launcherBody = "@echo off`r`n""$VenvPy"" -m gaming %*`r`n"
+    Set-Content -Path $Launcher -Value $launcherBody -Encoding ASCII -ErrorAction Stop
+} catch {
+    Write-Error "Could not write the launcher at $Launcher : $($_.Exception.Message)"
+    exit 1
+}
 Write-Host "Created launcher: $Launcher"
+
+# ---- post-install self-check ---------------------------------------------
+# Run the freshly created launcher so a broken install is caught now rather than
+# later when the user first tries `.\gaming web`.
+Write-Host "Verifying the launcher ..."
+$selfcheck = & $Launcher --version 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "The 'gaming' launcher was created but does not run:`n$selfcheck`nThe installation is incomplete - please report this output."
+    exit 1
+}
+Write-Host "Launcher OK: $selfcheck"
 
 Write-Host ""
 Write-Host "Installation complete."

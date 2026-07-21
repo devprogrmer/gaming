@@ -61,7 +61,7 @@ def filter_by_first_octet(ctx: ActionContext) -> None:
     from ... import pipeline
     from ...config import load_config
     from ...models import Filters
-    from ...processing.filters import is_datacenter
+    from ...processing.filters import has_provider_metadata, is_datacenter
 
     countries = [c.strip() for c in country.split(",") if c.strip()]
     # A "specific" datacenter/provider/org term reuses the existing provider
@@ -74,31 +74,72 @@ def filter_by_first_octet(ctx: ActionContext) -> None:
     raw = pipeline.discover(config, filters)
     records = pipeline.process(raw, filters)
 
-    # Apply the dynamic filters on top of the existing filters.
-    matched = [r for r in records if matches_first_octet(r.prefix, allowed)]
-    if dc_mode == "all":
-        matched = [r for r in matched if is_datacenter(r)]
-
+    # Step 1: octet match, reported on its own. This count is independent of the
+    # datacenter classification below, so the user always sees how many CIDRs
+    # match the octet even when none carry classifiable provider metadata (the
+    # real-world RIR case where the combined filter used to collapse to zero).
+    octet_matched = [r for r in records if matches_first_octet(r.prefix, allowed)]
     octet_label = ", ".join(str(o) for o in allowed)
-    if dc_mode == "all":
-        dc_label = "all datacenters"
-    else:
-        dc_label = f"provider/org ~ {provider_term!r}"
     ctx.print_(
-        f"\n{len(matched)} of {len(records)} discovered record(s) match "
-        f"first octet [{octet_label}] and {dc_label}:"
+        f"\n{len(octet_matched)} of {len(records)} discovered record(s) "
+        f"match first octet [{octet_label}]."
     )
-    if not matched:
+    if not octet_matched:
         ctx.print_("  (none)")
         return
-    for rec in matched:
-        country_tag = f" [{rec.country}]" if rec.country else ""
-        org_tag = f" — {rec.organization}" if rec.organization else ""
-        ctx.print_(f"  {rec.prefix}{country_tag}{org_tag}")
+
+    # Step 2: datacenter classification as a *secondary, labelled* narrowing.
+    if dc_mode == "all":
+        datacenters = [r for r in octet_matched if is_datacenter(r)]
+        # Records with no org/provider text can't be classified either way. They
+        # are a third bucket — surfaced, never silently dropped — so RIR-sourced
+        # CIDRs (country only, no org) remain actionable.
+        unclassified = [r for r in octet_matched if not has_provider_metadata(r)]
+        # "Not a datacenter" = has metadata to judge, but the heuristic said no.
+        not_datacenter = [
+            r
+            for r in octet_matched
+            if has_provider_metadata(r) and not is_datacenter(r)
+        ]
+        ctx.print_(
+            f"Of those: {len(datacenters)} classified as datacenters, "
+            f"{len(unclassified)} unclassified (no org/provider metadata to "
+            f"classify — shown separately, not dropped), "
+            f"{len(not_datacenter)} not datacenters."
+        )
+        # The actionable set keeps both confirmed datacenters and unclassifiable
+        # records; only records we can positively rule out are excluded.
+        matched = datacenters + unclassified
+        _print_octet_records(ctx, "Datacenters", datacenters)
+        _print_octet_records(
+            ctx, "Unclassified (no provider metadata available)", unclassified
+        )
+    else:
+        # "specific" provider/org term was already applied natively in process().
+        matched = octet_matched
+        _print_octet_records(
+            ctx, f"Matching provider/org ~ {provider_term!r}", matched
+        )
+
+    if not matched:
+        ctx.print_("\nNo records left to scan.")
+        return
 
     # Step 3: auto-scan the filtered records with strict reachability +
     # location requirements, then persist the qualifying hosts.
     auto_scan_matched(ctx, matched)
+
+
+def _print_octet_records(ctx: ActionContext, label: str, records: list) -> None:
+    """Print a labelled bucket of records (or a friendly empty note)."""
+    ctx.print_(f"\n{label} ({len(records)}):")
+    if not records:
+        ctx.print_("  (none)")
+        return
+    for rec in records:
+        country_tag = f" [{rec.country}]" if rec.country else ""
+        org_tag = f" — {rec.organization}" if rec.organization else ""
+        ctx.print_(f"  {rec.prefix}{country_tag}{org_tag}")
 
 
 def auto_scan_matched(ctx: ActionContext, records: list, scope: str = "filtered") -> None:

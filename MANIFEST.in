@@ -7,6 +7,7 @@ include install.sh
 include install.ps1
 include update.sh
 include update.ps1
+include packaging/gaming-web.service
 include src/gaming/py.typed
 recursive-include src/gaming/interactive/data *.txt
 recursive-include src/gaming/interactive/data *.toml

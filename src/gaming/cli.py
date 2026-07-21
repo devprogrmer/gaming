@@ -190,6 +190,23 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="regenerate the dashboard username/password and invalidate sessions",
     )
+    p_web.add_argument(
+        "-d",
+        "--daemon",
+        action="store_true",
+        help="run in the background, detached from the terminal/SSH session "
+        "(survives disconnect); writes a PID file for --stop/--status",
+    )
+    p_web.add_argument(
+        "--stop",
+        action="store_true",
+        help="stop a running background dashboard (via its PID file) and exit",
+    )
+    p_web.add_argument(
+        "--status",
+        action="store_true",
+        help="report whether a background dashboard is running and exit",
+    )
 
     # refresh-seeds (re-validate bundled provider CIDRs against live BGP)
     p_refresh = sub.add_parser(
@@ -422,13 +439,52 @@ def cmd_update(args: argparse.Namespace, config: Config) -> int:
 
 def cmd_web(args: argparse.Namespace, config: Config) -> int:
     # Imported lazily so normal CLI paths don't pull in the http server stack.
+    from .web import daemon as daemon_mod
     from .web.server import serve
+
+    # Lifecycle subcommands short-circuit before starting a server.
+    if getattr(args, "stop", False):
+        stopped = daemon_mod.stop()
+        if stopped:
+            sys.stdout.write("Stopped the background dashboard.\n")
+        else:
+            sys.stdout.write("No running background dashboard found.\n")
+        return 0
+
+    if getattr(args, "status", False):
+        st = daemon_mod.status()
+        if st.running:
+            import datetime as _dt
+
+            when = (
+                _dt.datetime.fromtimestamp(st.since).isoformat(timespec="seconds")
+                if st.since
+                else "unknown"
+            )
+            sys.stdout.write(
+                f"Dashboard is running (PID {st.pid}, since {when}).\n"
+            )
+        else:
+            sys.stdout.write("Dashboard is not running.\n")
+        return 0
+
+    daemon = getattr(args, "daemon", False)
+    if daemon:
+        # Refuse to start a second daemon on top of a live one.
+        existing = daemon_mod.status()
+        if existing.running:
+            sys.stderr.write(
+                f"A background dashboard is already running (PID {existing.pid}). "
+                "Use 'gaming web --stop' first, or 'gaming web --status'.\n"
+            )
+            return 1
 
     return serve(
         bind=getattr(args, "bind", "0.0.0.0"),
         port=getattr(args, "port", None),
         use_tls=getattr(args, "tls", False),
         reset_credentials=getattr(args, "reset_credentials", False),
+        daemon=daemon,
     )
 
 

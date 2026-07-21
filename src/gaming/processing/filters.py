@@ -5,6 +5,7 @@ the Iranian- and foreign-datacenter focus toggles.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass, field
 
 from ..logging_setup import get_logger
 from ..models import Filters, IPRecord
@@ -150,8 +151,26 @@ def is_datacenter(rec: IPRecord) -> bool:
     Uses the same heuristic keywords as the ``--iran-datacenter`` /
     ``--foreign-datacenter`` focus modes, but without any country scoping, so
     callers can ask "is this any kind of datacenter?" directly.
+
+    Note this keys off org/provider *text*: a record with no organization and no
+    provider (e.g. RIR delegated-stats allocations, which only carry a country)
+    has nothing to match and returns ``False``. That is "cannot classify", not
+    "definitely not a datacenter" — use :func:`has_provider_metadata` to tell the
+    two apart so unclassifiable records aren't silently dropped.
     """
     return _is_datacenter(rec)
+
+
+def has_provider_metadata(rec: IPRecord) -> bool:
+    """True if the record carries any org/provider text to classify against.
+
+    The datacenter/CDN heuristics all match keywords against org/provider text.
+    When both are absent (common for RIR-sourced records, which only carry a
+    country), those predicates can only ever return ``False`` — not because the
+    record isn't a datacenter, but because there is nothing to key off. Callers
+    use this to surface such records as "unclassified" rather than dropping them.
+    """
+    return bool(_text(rec))
 
 
 def is_foreign_cdn(rec: IPRecord) -> bool:
@@ -316,3 +335,45 @@ def apply_filters(records: Iterable[IPRecord], filters: Filters) -> list[IPRecor
     out = [r for r in records if matches(r, filters)]
     log.debug("filter kept %d records", len(out))
     return out
+
+
+@dataclass(slots=True)
+class LocationPartition:
+    """Result of splitting records by verified country location.
+
+    ``matched`` are records whose country field equals the requested code (the
+    authoritative location signal). ``unverified`` are records with a missing or
+    conflicting country — deliberately *not* included in a location-scoped
+    result, but surfaced separately so uncertain data is never silently dropped
+    nor silently misrepresented as a confident match.
+    """
+
+    matched: list[IPRecord] = field(default_factory=list)
+    unverified: list[IPRecord] = field(default_factory=list)
+
+
+def partition_by_country(
+    records: Iterable[IPRecord], country: str
+) -> LocationPartition:
+    """Split ``records`` into those verified in ``country`` vs. everything else.
+
+    The record's ISO country code is treated as the authoritative location
+    signal: a record is only "matched" when its country equals ``country``. This
+    is stricter than origin-by-ASN/org classification — an ASN registered as
+    Iranian but whose actual prefix geolocates elsewhere (anycast edge, foreign
+    PoP, misattributed WHOIS) carries a non-IR (or absent) country and lands in
+    ``unverified`` rather than leaking into an Iran-only result.
+
+    Records with no country are unverified too: for a location-scoped result the
+    default is to *exclude* uncertain data, not to assume it belongs.
+    """
+    want = (country or "").strip().upper()
+    matched: list[IPRecord] = []
+    unverified: list[IPRecord] = []
+    for rec in records:
+        rc = (rec.country or "").upper()
+        if rc and rc == want:
+            matched.append(rec)
+        else:
+            unverified.append(rec)
+    return LocationPartition(matched=matched, unverified=unverified)

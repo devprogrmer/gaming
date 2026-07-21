@@ -66,6 +66,13 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 اسکریپت نصب به‌صورت خودکار یک **محیط مجازی (virtualenv)** می‌سازد، ابزار را نصب می‌کند و یک
 اجراکنندهٔ `gaming` برایتان درست می‌کند. نیازی به نصب دستیِ هیچ وابستگی‌ای نیست.
 
+> **نکته:** اسکریپت نصب را از داخل پوشهٔ خودِ مخزن (که فقط یک `gaming` قابل‌اجرا می‌سازد)
+> اجرا کنید. اگر در همان پوشه از قبل یک **پوشه** یا فایل به نام `gaming` وجود داشته باشد
+> (مثلاً از یک نصب ناقصِ قبلی یا جایی که `src/gaming/` کنارش استخراج شده)، ساختِ اجراکننده
+> ممکن نیست و خطای `./gaming: Is a directory` می‌گیرید. در این حالت نصب‌کننده اکنون با پیام
+> روشن متوقف می‌شود؛ آن پوشه را حذف کنید یا نصب را از یک پوشهٔ تمیز اجرا کنید. در پایانِ نصب،
+> اسکریپت خودش اجراکننده را با `--version` می‌آزماید تا مطمئن شود سالم است.
+
 ---
 
 ## نصب کامل (گام‌به‌گام)
@@ -204,6 +211,55 @@ gaming web --reset-credentials
 - ورود ناموفق به‌ازای هر IP نرخ‌محدود می‌شود تا حملهٔ brute-force کند شود. برای
   اسکریپت/اتوماسیون می‌توانید از توکن Bearer (`Authorization: Bearer …`) استفاده کنید.
 - تغییر رمز از داخل داشبورد، رمز فعلی را می‌خواهد و همهٔ نشست‌های باز را باطل می‌کند.
+
+**اجرای دائمی بدون نیاز به باز ماندن SSH (Keep it running after you disconnect):**
+
+به‌طور پیش‌فرض `gaming web` تا وقتی زنده می‌ماند که ترمینال/نشست SSH بازکنندهٔ آن باز
+بماند؛ با بستن SSH فرایند هم بسته می‌شود. برای اینکه داشبورد مستقل از ترمینال روی سرور
+بماند دو راه دارید:
+
+By default `gaming web` only stays up while the terminal/SSH session that
+launched it stays open. To keep the dashboard running after you disconnect,
+use either the built-in `--daemon` flag (quick) or a systemd service (robust).
+
+```bash
+# روش سریع: اجرای پس‌زمینه و جدا از ترمینال. نام کاربری/رمز پیش از رفتن به پس‌زمینه
+# چاپ می‌شوند؛ خروجی در web.log و شناسهٔ فرایند در web.pid (پوشهٔ دادهٔ برنامه) ذخیره می‌شود.
+gaming web --daemon --bind 127.0.0.1 --port 8787
+
+# وضعیت اجرا را ببینید (آیا در حال اجراست و از چه زمانی)
+gaming web --status
+
+# توقف تمیز فرایند پس‌زمینه (SIGTERM، و در صورت لزوم SIGKILL)
+gaming web --stop
+```
+
+`--daemon` فقط بقای فرایند پس از قطع اتصال را تغییر می‌دهد؛ رفتار پیش‌فرض `--bind`
+و احراز هویت دست‌نخورده می‌ماند. روی ویندوز (بدون `os.fork`) این گزینه با پیام روشن
+خطا می‌دهد و شما را به سرویس‌منیجر ارجاع می‌دهد. `--daemon` changes only whether the
+process survives disconnection — not the bind/auth behavior.
+
+برای راه‌اندازی پایدارتر (بقا پس از ری‌بوت و ری‌استارت خودکار در صورت کرش) از فایل نمونهٔ
+systemd به نشانی `packaging/gaming-web.service` استفاده کنید (به‌صورت خودکار نصب نمی‌شود).
+For a more permanent/production setup, use the shipped systemd unit template
+`packaging/gaming-web.service` (not auto-installed):
+
+```ini
+# /etc/systemd/system/gaming-web.service  (خلاصه — فایل کامل در packaging/)
+[Service]
+User=gaming
+ExecStart=/opt/gaming/.venv/bin/gaming web --bind 127.0.0.1 --port 8787
+Restart=on-failure
+Environment=GAMING_HOME=/var/lib/gaming
+```
+
+```bash
+sudo cp packaging/gaming-web.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now gaming-web
+# اعتبارنامهٔ نخستین اجرا در ژورنال چاپ می‌شود:
+sudo journalctl -u gaming-web --no-pager | grep -A6 'web dashboard'
+```
 
 ---
 

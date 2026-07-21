@@ -9,6 +9,7 @@ from ..progress import ProgressBar
 from .common import (
     ORIGIN_LABELS,
     categories_for,
+    enforce_iran_location,
     map_hosts_to_entries,
     render_scan_results,
     run_seeded_discovery,
@@ -51,6 +52,13 @@ def scan_saved(ctx: ActionContext) -> None:
             "\nNo saved CIDRs for that selection yet. Run "
             "'Discover & save provider ranges' first."
         )
+        return
+
+    # Iran-only scans must not leak foreign-located CIDRs saved under an Iranian
+    # provider/category. Gate on the entry's verified country before scanning.
+    entries = enforce_iran_location(ctx, entries, origin)
+    if not entries:
+        ctx.print_("No IR-located CIDRs left to scan for that selection.")
         return
 
     hosts = ranges_mod.expand_hosts(
@@ -122,6 +130,10 @@ def discover_save_scan_provider(ctx: ActionContext) -> None:
 
     ctx.print_(f"\nDiscovering ranges for {scope_label} (seed data + live)...")
     records = run_seeded_discovery(ctx, chosen)
+
+    # For an Iran origin, keep only records verified as IR-located so foreign
+    # PoPs/anycast edges of an Iranian provider don't leak into the result.
+    records = enforce_iran_location(ctx, records, origin)
 
     added = ranges_mod.persist_records(records)
     total = sum(added.values())

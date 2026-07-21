@@ -279,6 +279,99 @@ def test_summary_reports_provider_connectivity(seeded_scan):
     assert arvan["international"] >= 1
 
 
+# ---- `gaming web` launcher / startup path --------------------------------
+def test_serve_prints_credentials_and_url_then_runs(tmp_path, monkeypatch):
+    """The `gaming web` entry point must print first-run credentials + the bound
+    URL and actually start serving. Regression guard for the broken-launcher
+    report: the existing tests only exercised the handler layer, so a failure in
+    the serve() startup path (credentials, URL banner, server bind) went
+    uncaught. We fake the HTTP server so serve_forever() returns immediately.
+    """
+    from gaming.web import server
+
+    started = {"served": False, "closed": False}
+
+    class _FakeHTTPD:
+        def __init__(self, addr, handler):
+            self.socket = object()
+            self.address = addr
+
+        def serve_forever(self):
+            started["served"] = True
+
+        def server_close(self):
+            started["closed"] = True
+
+    monkeypatch.setattr(server, "ThreadingHTTPServer", _FakeHTTPD)
+    monkeypatch.setattr(server, "_pick_free_port", lambda bind: 31337)
+    monkeypatch.setattr(server, "_detect_server_ip", lambda: "203.0.113.7")
+
+    lines: list[str] = []
+    rc = server.serve(bind="0.0.0.0", print_fn=lines.append)
+
+    assert rc == 0
+    assert started["served"] and started["closed"]
+    out = "\n".join(lines)
+    # First run: a username and a one-time password are shown.
+    assert "Username:" in out
+    assert "Password:" in out
+    assert "shown ONCE" in out
+    # The reachable URL (detected server IP + chosen port) is printed.
+    assert "http://203.0.113.7:31337/" in out
+
+
+# ---- Iran-only location gate (web scan) ----------------------------------
+def test_web_scan_iran_category_excludes_non_ir_located(env, monkeypatch):
+    """The web scan of an Iranian category must only scan IR-located CIDRs and
+    report foreign-located ones separately (Bug 3, web path)."""
+    app, creds, pw = env
+    cookie = _login(app, creds, pw)
+
+    from gaming.interactive import ranges as ranges_mod
+
+    ranges_mod.save_discovered(
+        "iran_datacenter",
+        ["185.51.200.0/24", "5.5.5.0/24"],
+        metadata={
+            "185.51.200.0/24": ("IR", "pars"),   # genuinely Iranian
+            "5.5.5.0/24": ("DE", "arvancloud"),   # Iranian org, foreign PoP
+        },
+    )
+
+    scanned: list[str] = []
+
+    from gaming.interactive import scanner as scanner_mod
+
+    def _fake_scan_hosts(hosts, *, count=4, timeout=2.0, concurrency=32, on_result=None):
+        scanned.extend(hosts)
+        return []
+
+    monkeypatch.setattr(scanner_mod, "scan_hosts", _fake_scan_hosts)
+    # Keep the abroad pass offline.
+    monkeypatch.setattr(scanner_mod, "check_abroad", lambda host, **kw: (None, 0, 0))
+
+    start = app.handle(
+        _req("POST", "/api/scan", body={"category": "iran_datacenter"}, cookie=cookie)
+    )
+    job_id = json.loads(start.body)["job_id"]
+
+    import time
+
+    result = None
+    for _ in range(100):
+        resp = app.handle(_req("GET", f"/api/jobs?id={job_id}", cookie=cookie))
+        job = json.loads(resp.body)
+        if job["status"] in ("done", "error"):
+            result = job
+            break
+        time.sleep(0.02)
+    assert result is not None and result["status"] == "done"
+    # The foreign-located CIDR is reported as unverified, not scanned.
+    assert "5.5.5.0/24" in result["result"]["location_unverified"]
+    assert not any(h.startswith("5.5.5.") for h in scanned)
+    assert any(h.startswith("185.51.200.") for h in scanned)
+
+
 # ---- static + auth-store units -------------------------------------------
 def test_password_strength_rules():
     from gaming.web.auth import check_password_strength

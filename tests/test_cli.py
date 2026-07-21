@@ -13,6 +13,49 @@ def test_sources_command(capsys):
         assert name in out
 
 
+def test_web_status_reports_not_running(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("GAMING_HOME", str(tmp_path))
+    rc = main(["web", "--status"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "not running" in out
+
+
+def test_web_stop_with_no_daemon_is_friendly(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("GAMING_HOME", str(tmp_path))
+    rc = main(["web", "--stop"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "No running background dashboard" in out
+
+
+def test_web_status_reports_running_pid(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("GAMING_HOME", str(tmp_path))
+    import os
+
+    from gaming.web import daemon
+
+    daemon.write_pid(os.getpid())
+    rc = main(["web", "--status"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "running" in out
+    assert str(os.getpid()) in out
+
+
+def test_web_daemon_refuses_when_already_running(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("GAMING_HOME", str(tmp_path))
+    import os
+
+    from gaming.web import daemon
+
+    daemon.write_pid(os.getpid())  # pretend a daemon is already up
+    rc = main(["web", "--daemon"])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "already running" in err
+
+
 def test_menu_subcommand_invokes_menu(monkeypatch):
     calls = []
     import gaming.interactive.menu as menu

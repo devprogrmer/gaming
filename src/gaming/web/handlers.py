@@ -325,13 +325,24 @@ def _scan_and_store(app: WebApp, cidrs: Any, category: str) -> dict[str, Any]:
     from ..interactive import ranges as ranges_mod
     from ..interactive import scanner
     from ..interactive.settings import load_settings
+    from ..processing.filters import partition_by_country
 
     settings = load_settings()
     cidr_list: list[str] = []
+    unverified_iran: list[str] = []
     if isinstance(cidrs, list):
         cidr_list = [str(c) for c in cidrs]
     elif category in ranges_mod.CATEGORIES:
-        cidr_list = [e.cidr for e in ranges_mod.category_entries(category)]
+        entries = ranges_mod.category_entries(category)
+        # An Iran-origin category scan must only include CIDRs verified as
+        # IR-located; foreign PoPs/anycast edges saved under an Iranian provider
+        # are reported separately rather than silently scanned as "Iranian".
+        if category.startswith("iran"):
+            part = partition_by_country(entries, "IR")
+            cidr_list = [e.cidr for e in part.matched]
+            unverified_iran = [e.cidr for e in part.unverified]
+        else:
+            cidr_list = [e.cidr for e in entries]
 
     hosts = ranges_mod.expand_hosts(
         cidr_list,
@@ -345,6 +356,7 @@ def _scan_and_store(app: WebApp, cidrs: Any, category: str) -> dict[str, Any]:
         "scan_id": scan_id,
         "counts": report.combined_counts,
         "results": rows,
+        "location_unverified": unverified_iran,
     }
 
 

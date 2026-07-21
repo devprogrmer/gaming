@@ -75,11 +75,34 @@ echo "Installing gaming ..."
 
 # ---- create a convenient launcher ----------------------------------------
 LAUNCHER="${REPO_DIR}/gaming"
-cat > "${LAUNCHER}" <<EOF
+
+# Fail loudly if something already occupies the launcher path as a directory.
+# This is exactly what produced the real-world "-bash: ./gaming: Is a directory"
+# failure: a stale/partial install or a checkout where the src/gaming/ package
+# was extracted alongside leaves a 'gaming' directory here, the `cat >` redirect
+# below fails with "Is a directory", and the user is left with no launcher.
+if [ -d "${LAUNCHER}" ]; then
+    echo "error: a directory named 'gaming' already exists here:" >&2
+    echo "    ${LAUNCHER}" >&2
+    echo "It is blocking creation of the 'gaming' launcher script." >&2
+    echo "Remove that directory if it is not needed, e.g.:" >&2
+    echo "    rm -rf '${LAUNCHER}'" >&2
+    echo "or run this installer from a clean, dedicated directory that does" >&2
+    echo "not already contain a 'gaming' file or folder, then re-run it." >&2
+    exit 1
+fi
+
+if ! cat > "${LAUNCHER}" <<EOF
 #!/usr/bin/env bash
 # Auto-generated launcher for the gaming interactive tool.
 exec "${VENV_PY}" -m gaming "\$@"
 EOF
+then
+    echo "error: could not write the launcher script at:" >&2
+    echo "    ${LAUNCHER}" >&2
+    echo "Check directory permissions and available disk space, then re-run." >&2
+    exit 1
+fi
 chmod +x "${LAUNCHER}"
 echo "Created launcher: ${LAUNCHER}"
 
@@ -89,6 +112,18 @@ if [ "${LINK_USER_BIN}" -eq 1 ]; then
     echo "Linked launcher into ${HOME}/.local/bin/gaming"
     echo "(Ensure ~/.local/bin is on your PATH.)"
 fi
+
+# ---- post-install self-check ---------------------------------------------
+# Run the freshly created launcher so a broken install is caught NOW rather than
+# later when the user first tries `./gaming web`.
+echo "Verifying the launcher ..."
+if ! SELFCHECK_OUT="$("${LAUNCHER}" --version 2>&1)"; then
+    echo "error: the 'gaming' launcher was created but does not run:" >&2
+    echo "${SELFCHECK_OUT}" >&2
+    echo "The installation is incomplete — please report this output." >&2
+    exit 1
+fi
+echo "Launcher OK: ${SELFCHECK_OUT}"
 
 echo
 echo "Installation complete."

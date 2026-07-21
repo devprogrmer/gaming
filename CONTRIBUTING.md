@@ -52,6 +52,25 @@ python -m build && twine check dist/*
   Please do not add third-party runtime dependencies without discussion.
 - **Commit messages**: short imperative subject; explain the "why" in the body.
 
+## Verifying the launcher and `gaming web`
+
+The automated suite exercises the handler and `serve()` startup layers, but the
+`install.sh` / `install.ps1` launcher (the `./gaming` script itself) is only
+verified by the installer's own post-install self-check. If you touch the
+installers or the `web` command, verify the real end-to-end path manually:
+
+```bash
+./install.sh            # must end with "Launcher OK: gaming <version>"
+./gaming --version      # the launcher runs and prints the version
+./gaming web            # prints credentials (first run) + the bound URL, stays up
+```
+
+Then open the printed URL in a browser and confirm the login page loads. A
+common real-world breakage is a stale `gaming` **directory** sitting where the
+launcher file should go (e.g. a checkout where `src/gaming/` was extracted
+alongside): the installer now detects this and fails loudly instead of leaving a
+broken `./gaming`.
+
 ## Adding a discovery source
 
 1. Create `src/gaming/discovery/<name>.py` with a class subclassing `Source`:

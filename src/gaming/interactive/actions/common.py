@@ -97,6 +97,37 @@ def run_seeded_discovery(ctx: ActionContext, providers: list) -> list:
     return records
 
 
+def enforce_iran_location(ctx: ActionContext, records: list, origin: str) -> list:
+    """Strictly keep only genuinely IR-located records when origin is Iran.
+
+    Origin selection is by provider/ASN classification, which can attach a
+    foreign-located CIDR (an Iranian CDN's overseas PoP, an anycast edge node,
+    or a record whose registered-country differs from its actual prefix
+    location) to an Iranian provider. For an "Iran" scan the record's country is
+    the authoritative location signal: this drops anything not verified as
+    ``IR`` into a clearly-labelled "location unverified" bucket instead of
+    letting it leak into Iran-only results, and reports how many were excluded.
+
+    A non-Iran origin is returned unchanged.
+    """
+    if origin != "iran":
+        return records
+    from ...processing.filters import partition_by_country
+
+    part = partition_by_country(records, "IR")
+    if part.unverified:
+        ctx.print_(
+            f"\nExcluding {len(part.unverified)} record(s) not verified as "
+            f"located in Iran (foreign PoP / anycast / missing or non-IR "
+            f"country); kept {len(part.matched)} IR-located record(s)."
+        )
+        for rec in part.unverified:
+            prefix = getattr(rec, "prefix", None) or getattr(rec, "cidr", "?")
+            cc = getattr(rec, "country", None) or "??"
+            ctx.print_(f"  [location unverified: {cc}] {prefix}")
+    return part.matched
+
+
 def render_scan_results(
     ctx: ActionContext,
     report,

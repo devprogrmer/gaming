@@ -3,11 +3,14 @@ from __future__ import annotations
 from gaming.models import Filters, IPRecord
 from gaming.processing.filters import (
     apply_filters,
+    has_provider_metadata,
+    is_datacenter,
     is_datacenter_only,
     is_foreign_cdn,
     is_iranian_cdn,
     matches,
     matches_region,
+    partition_by_country,
     region_of,
 )
 
@@ -115,6 +118,43 @@ def test_iranian_cdn_country_keyword_fallback():
     # Sparse metadata: IR country + a generic "edge" keyword is enough.
     rec = _rec("Some Iranian Edge Network", provider="", country="IR")
     assert is_iranian_cdn(rec)
+
+
+def test_datacenter_vs_unclassified_metadata():
+    # Has datacenter keyword in org text -> classified as a datacenter.
+    dc = IPRecord(prefix="1.2.3.0/24", organization="Foo Hosting", country="DE")
+    assert is_datacenter(dc)
+    assert has_provider_metadata(dc)
+
+    # Has org text but no datacenter keyword -> not a datacenter, but classifiable.
+    isp = IPRecord(prefix="1.2.3.0/24", organization="Some ISP", country="IR")
+    assert not is_datacenter(isp)
+    assert has_provider_metadata(isp)
+
+    # RIR-style record: country only, no org/provider -> cannot be classified.
+    # is_datacenter is False, but that's "unknown", surfaced via has_provider_metadata.
+    rir = IPRecord(prefix="212.1.0.0/16", country="IR", organization=None, provider=None)
+    assert not is_datacenter(rir)
+    assert not has_provider_metadata(rir)
+
+
+def test_partition_by_country_uses_country_as_authoritative_signal():
+    # Mixed-country fixture: a genuinely-IR record, an Iranian-org record whose
+    # actual prefix is in DE (foreign PoP / misattributed), and a record with no
+    # country at all (ambiguous).
+    genuine_ir = _rec("Pars Pardazesh", provider="pars", country="IR")
+    ir_org_de_prefix = _rec("ArvanCloud edge", provider="arvancloud", country="DE")
+    no_country = IPRecord(prefix="212.0.0.0/16", organization=None, provider=None)
+
+    part = partition_by_country(
+        [genuine_ir, ir_org_de_prefix, no_country], "IR"
+    )
+    # Only the genuinely IR-located record is matched.
+    assert part.matched == [genuine_ir]
+    # The Iranian-org-but-foreign-prefix record and the country-less record are
+    # both unverified — excluded from the Iran-only set, not silently dropped.
+    assert ir_org_de_prefix in part.unverified
+    assert no_country in part.unverified
 
 
 def test_region_mapping_and_matching():
