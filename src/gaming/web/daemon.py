@@ -5,7 +5,8 @@ launched it. The pieces here are deliberately split so the PID-file and
 signal logic can be unit-tested without actually forking a detached process:
 
 * :func:`read_pid` / :func:`write_pid` / :func:`remove_pid` — PID-file I/O.
-* :func:`process_alive` — liveness check via ``os.kill(pid, 0)``.
+* :func:`process_alive` — liveness check (``kill(pid, 0)`` on POSIX,
+  ``OpenProcess`` on Windows, where signal 0 would send Ctrl+C instead).
 * :func:`status` — "running since when?" without touching the process.
 * :func:`stop` — graceful ``SIGTERM`` (falls back to ``SIGKILL``) via PID file.
 * :func:`daemonize` — POSIX double-fork/``setsid`` detach + stdio redirect.
@@ -72,9 +73,17 @@ def remove_pid(pid_path: Path | None = None) -> None:
 
 
 def process_alive(pid: int) -> bool:
-    """True if a process with ``pid`` currently exists (POSIX ``kill -0``)."""
+    """True if a process with ``pid`` currently exists.
+
+    On POSIX this is the classic ``kill(pid, 0)`` probe. On Windows that idiom
+    is unsafe — ``os.kill``'s signal ``0`` is ``CTRL_C_EVENT``, which would send
+    a Ctrl+C to the whole console process group instead of just testing
+    liveness — so we query the process handle directly via ``ctypes`` there.
+    """
     if pid <= 0:
         return False
+    if os.name == "nt":
+        return _process_alive_windows(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -85,6 +94,36 @@ def process_alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def _process_alive_windows(pid: int) -> bool:
+    """Windows liveness check via ``OpenProcess`` + ``GetExitCodeProcess``.
+
+    Avoids ``os.kill`` entirely (see :func:`process_alive`). Returns False if the
+    process can't be opened (gone) or has already exited; True while it is still
+    running. Fail-soft: any ctypes/OS error is treated as "not alive".
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+        )
+        if not handle:
+            return False
+        try:
+            exit_code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return False
+            return exit_code.value == STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    except OSError:
+        return False
 
 
 def status(pid_path: Path | None = None) -> Status:

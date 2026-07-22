@@ -45,6 +45,23 @@ def test_process_alive_for_self_and_bogus():
     assert daemon.process_alive(-1) is False
 
 
+def test_process_alive_never_signals_on_windows(monkeypatch):
+    """Regression: on Windows ``os.kill(pid, 0)`` sends CTRL_C_EVENT (signal 0 is
+    CTRL_C_EVENT) to the whole console group, which killed pytest in CI. The
+    Windows path must query the process handle instead and never call os.kill.
+    """
+    if os.name != "nt":
+        pytest.skip("Windows-specific liveness path")
+
+    def _boom(*a, **k):  # pragma: no cover - only runs if the bug returns
+        raise AssertionError("process_alive must not call os.kill on Windows")
+
+    monkeypatch.setattr(daemon.os, "kill", _boom)
+    # Both a live and a bogus PID must resolve without ever touching os.kill.
+    assert daemon.process_alive(os.getpid()) is True
+    assert daemon.process_alive(999_999_999) is False
+
+
 def test_status_running_uses_live_pid(tmp_path):
     pid_path = tmp_path / "web.pid"
     daemon.write_pid(os.getpid(), pid_path)
