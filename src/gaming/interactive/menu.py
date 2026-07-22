@@ -98,6 +98,7 @@ _MENU = """
   6) Update installed version
   7) Filter CIDRs by first octet
   8) Discover, save & scan a provider
+  9) Launch web panel
   0) Exit
 {rule}"""
 
@@ -195,6 +196,8 @@ class Menu:
                     self._dispatch(actions.filter_by_first_octet)
                 elif choice == "8":
                     self._dispatch(actions.discover_save_scan_provider)
+                elif choice == "9":
+                    self._dispatch(actions.launch_web_panel)
                 elif choice in ("0", "q", "quit", "exit"):
                     self._print("Goodbye.")
                     return 0

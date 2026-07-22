@@ -19,6 +19,7 @@ import secrets
 import socket
 import ssl
 import subprocess
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -232,16 +233,38 @@ def serve(
         # We are now the detached grandchild; record our PID for --stop/--status.
         daemon_mod.write_pid(os.getpid())
 
+    # ``serve_forever`` must be stopped via ``shutdown()`` called from a
+    # *different* thread than the one running it (stdlib requirement — calling
+    # it from the same thread deadlocks). So it runs on a background thread and
+    # the main thread just waits, letting Ctrl+C interrupt the wait cleanly
+    # instead of landing mid-request-handling.
+    stopped = threading.Event()
+
+    def _run() -> None:
+        try:
+            httpd.serve_forever(poll_interval=0.25)
+        finally:
+            stopped.set()
+
+    server_thread = threading.Thread(
+        target=_run, name="gaming-web-serve", daemon=True
+    )
+    server_thread.start()
+
     try:
-        httpd.serve_forever()
+        while not stopped.is_set():
+            stopped.wait(timeout=0.5)
     except KeyboardInterrupt:
-        print_fn("\nShutting down dashboard.")
+        print_fn("\nShutting down dashboard...")
     finally:
+        httpd.shutdown()
+        server_thread.join(timeout=5)
         httpd.server_close()
         if daemon:
             from . import daemon as daemon_mod
 
             daemon_mod.remove_pid()
+        print_fn("Dashboard stopped.")
     return 0
 
 

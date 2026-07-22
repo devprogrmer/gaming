@@ -547,6 +547,45 @@ def test_menu_lists_new_scan_and_update_options(tmp_path):
     assert "Update installed version" in out
 
 
+# ---- menu option 9: launch web panel --------------------------------------
+def test_menu_launch_web_panel_starts_server_and_returns_to_menu(tmp_path, monkeypatch):
+    """Selecting 'Launch web panel' starts the same in-process server logic as
+    `gaming web`, prints the startup banner, and returns control to the menu
+    loop once the (faked, immediately-returning) server stops.
+    """
+    from gaming.web import server as web_server
+
+    started = {"served": False, "closed": False}
+
+    class _FakeHTTPD:
+        def __init__(self, addr, handler):
+            self.socket = object()
+            self.address = addr
+
+        def serve_forever(self, poll_interval=0.5):
+            started["served"] = True
+
+        def shutdown(self):
+            pass
+
+        def server_close(self):
+            started["closed"] = True
+
+    monkeypatch.setattr(web_server, "ThreadingHTTPServer", _FakeHTTPD)
+    monkeypatch.setattr(web_server, "_pick_free_port", lambda bind: 0)
+    monkeypatch.setattr(web_server, "_detect_server_ip", lambda: "203.0.113.5")
+
+    store = HistoryStore(tmp_path / "h.db")
+    # 9) launch web panel -> blank bind/port/tls (defaults) -> 0) exit menu.
+    out = _run_menu("9\n\n\n\n0\n", store)
+
+    assert started["served"] and started["closed"]
+    assert "gaming web dashboard" in out
+    assert "Press Ctrl+C to stop." in out
+    # The menu loop resumed and exited normally afterward.
+    assert "Goodbye." in out
+
+
 def test_menu_banner_renders(tmp_path):
     store = HistoryStore(tmp_path / "h.db")
     out = _run_menu("0\n", store)

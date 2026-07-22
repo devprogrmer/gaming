@@ -223,6 +223,132 @@ def test_build_providers_includes_atlas_with_key():
     ]
 
 
+# ---- measure_from_near (approximate proximity ping) -----------------------
+def _fake_get_json_for_proximity(*, asns, probe_results, poll_results):
+    """Dispatch fake GETs by URL shape: RIPEstat network-info, Atlas probe
+    search, or Atlas measurement results polling."""
+
+    def _fake(url, **kw):
+        if "network-info" in url:
+            return {"data": {"asns": asns}} if asns is not None else {"data": {}}
+        if "/probes/" in url:
+            return {"results": probe_results}
+        if "/results/" in url:
+            return poll_results
+        raise AssertionError(f"unexpected GET {url}")
+
+    return _fake
+
+
+def test_measure_from_near_nearby_probe_found_and_succeeds(monkeypatch):
+    monkeypatch.setattr(
+        gc,
+        "get_json",
+        _fake_get_json_for_proximity(
+            asns=["12345"],
+            probe_results=[{"id": 999}],
+            poll_results=[{"rcvd": 3, "avg": 33.5}],
+        ),
+    )
+    monkeypatch.setattr(gc, "post_json", lambda url, payload, **kw: {"measurements": [55555]})
+    monkeypatch.setattr(gc.time, "sleep", lambda _s: None)
+
+    res = gc.measure_from_near("185.1.1.1", "8.8.8.8", api_key="k")
+    assert res.status == gc.PROXIMITY_OK
+    assert res.probe_id == 999
+    assert res.probe_asn == "12345"
+    assert res.avg_ms == 33.5
+    assert res.reachable is True
+    # The approximation disclaimer must always be present, never omitted.
+    assert "Approximate" in res.note
+    assert "not from the IP itself" in res.note
+
+
+def test_measure_from_near_nearby_probe_found_but_measurement_times_out(monkeypatch):
+    monkeypatch.setattr(
+        gc,
+        "get_json",
+        _fake_get_json_for_proximity(
+            asns=["12345"], probe_results=[{"id": 999}], poll_results=[]
+        ),
+    )
+    monkeypatch.setattr(gc, "post_json", lambda url, payload, **kw: {"measurements": [55555]})
+    monkeypatch.setattr(gc.time, "sleep", lambda _s: None)
+
+    res = gc.measure_from_near("185.1.1.1", "8.8.8.8", api_key="k", poll_attempts=2)
+    assert res.status == gc.PROXIMITY_UNAVAILABLE
+    assert "Approximate" in res.note
+
+
+def test_measure_from_near_measurement_create_failure_is_unavailable(monkeypatch):
+    monkeypatch.setattr(
+        gc,
+        "get_json",
+        _fake_get_json_for_proximity(
+            asns=["12345"], probe_results=[{"id": 999}], poll_results=[]
+        ),
+    )
+
+    def _boom(url, payload, **kw):
+        raise gc.HTTPError("atlas down")
+
+    monkeypatch.setattr(gc, "post_json", _boom)
+    monkeypatch.setattr(gc.time, "sleep", lambda _s: None)
+
+    res = gc.measure_from_near("185.1.1.1", "8.8.8.8", api_key="k")
+    assert res.status == gc.PROXIMITY_UNAVAILABLE
+
+
+def test_measure_from_near_no_nearby_probe_found(monkeypatch):
+    monkeypatch.setattr(
+        gc,
+        "get_json",
+        _fake_get_json_for_proximity(asns=["12345"], probe_results=[], poll_results=[]),
+    )
+    res = gc.measure_from_near("185.1.1.1", "8.8.8.8", api_key="k")
+    assert res.status == gc.PROXIMITY_NO_PROBE
+    assert "No RIPE Atlas probe was found" in res.note
+    assert "Approximate" in res.note
+
+
+def test_measure_from_near_unresolvable_source_asn_is_no_nearby_probe(monkeypatch):
+    monkeypatch.setattr(
+        gc,
+        "get_json",
+        _fake_get_json_for_proximity(asns=None, probe_results=[], poll_results=[]),
+    )
+    res = gc.measure_from_near("185.1.1.1", "8.8.8.8", api_key="k")
+    assert res.status == gc.PROXIMITY_NO_PROBE
+
+
+def test_measure_from_near_network_info_lookup_failure_is_unavailable(monkeypatch):
+    def _boom(url, **kw):
+        raise gc.HTTPError("ripestat down")
+
+    monkeypatch.setattr(gc, "get_json", _boom)
+    res = gc.measure_from_near("185.1.1.1", "8.8.8.8", api_key="k")
+    assert res.status == gc.PROXIMITY_UNAVAILABLE
+
+
+def test_measure_from_near_without_key_is_unavailable_and_makes_no_http_calls(monkeypatch):
+    monkeypatch.delenv("GAMING_RIPE_ATLAS_KEY", raising=False)
+
+    def _boom(*a, **k):
+        raise AssertionError("must not make an HTTP call without an API key")
+
+    monkeypatch.setattr(gc, "get_json", _boom)
+    monkeypatch.setattr(gc, "post_json", _boom)
+
+    res = gc.measure_from_near("185.1.1.1", "8.8.8.8", api_key=None)
+    assert res.status == gc.PROXIMITY_UNAVAILABLE
+    assert "not configured" in res.note.lower()
+
+
+def test_measure_from_near_invalid_ip_is_unavailable():
+    res = gc.measure_from_near("not-an-ip", "8.8.8.8", api_key="k")
+    assert res.status == gc.PROXIMITY_UNAVAILABLE
+
+
 def test_combine_results_sums_node_counts():
     # Two providers: 1/2 and 2/2 -> combined 3/4 -> >=0.5 reachable.
     combined = combine_results(

@@ -100,7 +100,8 @@ function renderTable(tableEl, columns, rows) {
     for (const col of columns) {
       const val = row[col.key];
       const td = el("td");
-      if (col.badge) td.append(badge(val));
+      if (col.action) td.append(col.action(row));
+      else if (col.badge) td.append(badge(val));
       else td.textContent = val === null || val === undefined ? "-" : String(val);
       tr.append(td);
     }
@@ -161,52 +162,115 @@ function pollJob(jobId, onUpdate, tries = 0) {
 
 // ---- live scan -----------------------------------------------------------
 let lastScanId = null;
+let lastScanMode = "combined";
 $("#scan-btn").addEventListener("click", async () => {
-  $("#scan-status").textContent = "Scanning…";
+  const mode = (document.querySelector('input[name="scan-mode"]:checked') || {}).value || "combined";
+  lastScanMode = mode;
+  $("#scan-status").textContent = mode === "sequential" ? "Scanning (one CIDR at a time)…" : "Scanning…";
   $("#dl-whitelist").disabled = true;
+  $("#scan-counts").innerHTML = "";
+  $("#scan-table").innerHTML = "";
+  $("#scan-table").classList.toggle("hidden", mode === "sequential");
+  $("#scan-sequential-wrap").classList.toggle("hidden", mode !== "sequential");
+  $("#scan-sequential-wrap").innerHTML = "";
   const r = await api("/api/scan", {
-    method: "POST", body: { category: $("#scan-category").value },
+    method: "POST", body: { category: $("#scan-category").value, mode },
   });
   if (!r.ok) { $("#scan-status").textContent = "Scan failed."; return; }
   pollJob(r.data.job_id, (job) => {
-    if (job.status !== "done") {
+    if (job.status === "error") {
       $("#scan-status").textContent = "Scan error: " + (job.error || "");
       return;
     }
     const res = job.result || {};
-    lastScanId = res.scan_id;
-    $("#scan-status").textContent = `Scan #${res.scan_id} complete.`;
-    renderScanCounts(res.counts || {});
-    $("#dl-whitelist").disabled = false;
-    renderScanRows(res.results || []);
+    if (res.mode === "sequential") {
+      const done = job.status === "done";
+      $("#scan-status").textContent = done
+        ? `Scan complete (${res.cidrs_done}/${res.cidrs_total} CIDRs).`
+        : `Scanning… (${res.cidrs_done}/${res.cidrs_total} CIDRs)`;
+      renderSequentialScan(res);
+      if (done) {
+        lastScanId = res.scan_id;
+        renderScanCounts(res.counts || {});
+        $("#dl-whitelist").disabled = res.scan_id == null;
+      }
+    } else if (job.status === "done") {
+      lastScanId = res.scan_id;
+      $("#scan-status").textContent = `Scan #${res.scan_id} complete.`;
+      renderScanCounts(res.counts || {});
+      $("#dl-whitelist").disabled = false;
+      renderScanRows(res.results || []);
+    }
   });
 });
 $("#whitelist-only").addEventListener("change", () => {
-  if (lastScanRows) renderScanRows(lastScanRows);
+  if (lastScanMode === "sequential" && lastSequentialResult) renderSequentialScan(lastSequentialResult);
+  else if (lastScanRows) renderScanRows(lastScanRows);
 });
+
+// Shared column set for any per-host results table (combined or per-CIDR).
+function hostColumns() {
+  return [
+    { key: "host", label: "HOST" }, { key: "health", label: "HEALTH", badge: true },
+    { key: "avg_ms", label: "AVG(ms)" },
+    { key: "abroad_label", label: "ABROAD" },
+    { key: "combined", label: "WHITELIST", badge: true },
+    { key: "ports_label", label: "PORTS" },
+    { key: "_test", label: "", action: (row) => {
+        const btn = el("button", { class: "row-btn" }, "Test path to…");
+        btn.addEventListener("click", (ev) => { ev.stopPropagation(); startProximityPing(row.host); });
+        return btn;
+      } },
+  ];
+}
+function decorateRows(rows) {
+  return rows.map((r) => ({
+    ...r,
+    abroad_label: r.abroad_status === "unavailable"
+      ? "unavailable"
+      : (r.abroad_reachable === null || r.abroad_reachable === undefined
+        ? "not checked"
+        : (r.abroad_reachable ? "OK" : "FAIL") + ` (${r.abroad_nodes_ok||0}/${r.abroad_nodes_total||0})`),
+    ports_label: (r.open_ports && r.open_ports.length) ? r.open_ports.join(",") : "-",
+  }));
+}
+
 let lastScanRows = null;
 function renderScanRows(rows) {
   lastScanRows = rows;
   const only = $("#whitelist-only").checked;
   const shown = only ? rows.filter((r) => r.combined === "INTERNATIONAL") : rows;
-  renderTable($("#scan-table"),
-    [
-      { key: "host", label: "HOST" }, { key: "health", label: "HEALTH", badge: true },
-      { key: "avg_ms", label: "AVG(ms)" },
-      { key: "abroad_label", label: "ABROAD" },
-      { key: "combined", label: "WHITELIST", badge: true },
-      { key: "ports_label", label: "PORTS" },
-    ],
-    shown.map((r) => ({
-      ...r,
-      abroad_label: r.abroad_status === "unavailable"
-        ? "unavailable"
-        : (r.abroad_reachable === null || r.abroad_reachable === undefined
-          ? "not checked"
-          : (r.abroad_reachable ? "OK" : "FAIL") + ` (${r.abroad_nodes_ok||0}/${r.abroad_nodes_total||0})`),
-      ports_label: (r.open_ports && r.open_ports.length) ? r.open_ports.join(",") : "-",
-    })));
+  renderTable($("#scan-table"), hostColumns(), decorateRows(shown));
 }
+
+let lastSequentialResult = null;
+function renderSequentialScan(res) {
+  lastSequentialResult = res;
+  const only = $("#whitelist-only").checked;
+  const wrap = $("#scan-sequential-wrap");
+  wrap.innerHTML = "";
+  for (const block of res.per_cidr || []) {
+    const section = el("div", { class: "cidr-block" });
+    section.append(el("h3", {}, block.cidr + (block.error ? " — scan failed" : "")));
+    if (block.error) {
+      section.append(el("p", { class: "error" }, block.error));
+    } else {
+      const countsEl = el("div", { class: "counts" });
+      for (const [k, v] of Object.entries(block.counts || {})) countsEl.append(badge(`${k}: ${v}`));
+      section.append(countsEl);
+      const rows = only ? block.results.filter((r) => r.combined === "INTERNATIONAL") : block.results;
+      const table = el("table");
+      section.append(el("div", { class: "table-wrap" }, table));
+      renderTable(table, hostColumns(), decorateRows(rows || []));
+    }
+    wrap.append(section);
+  }
+  if (res.location_unverified && res.location_unverified.length) {
+    wrap.append(el("p", { class: "muted" },
+      `Not verified as located in Iran (excluded): ${res.location_unverified.join(", ")}`));
+  }
+}
+
 function renderScanCounts(counts) {
   const wrap = $("#scan-counts");
   wrap.innerHTML = "";
@@ -216,6 +280,52 @@ function renderScanCounts(counts) {
 $("#dl-whitelist").addEventListener("click", () => {
   if (lastScanId != null) window.location = `/api/export?kind=whitelist&scan=${lastScanId}`;
 });
+
+// ---- proximity ping ("Test path to…") -------------------------------------
+// Explicitly separate from the Iran/abroad reachability columns above: this
+// measures an approximate path from the *nearest available RIPE Atlas probe*
+// to the source IP's network, never the source IP's own ping.
+async function startProximityPing(sourceIp) {
+  const dest = window.prompt(`Test path from near ${sourceIp} to which destination IP?`);
+  if (!dest) return;
+  renderProximityResult(sourceIp, dest, { status: "pending" });
+  const r = await api("/api/proximity-ping", {
+    method: "POST", body: { source_ip: sourceIp, destination_ip: dest },
+  });
+  if (!r.ok) {
+    renderProximityResult(sourceIp, dest, {
+      status: "unavailable", note: (r.data && r.data.error) || "could not start the test",
+    });
+    return;
+  }
+  pollJob(r.data.job_id, (job) => {
+    if (job.status === "error") {
+      renderProximityResult(sourceIp, dest, { status: "unavailable", note: job.error || "" });
+      return;
+    }
+    if (job.status === "done") renderProximityResult(sourceIp, dest, job.result || {});
+  });
+}
+function renderProximityResult(sourceIp, dest, res) {
+  const box = $("#proximity-result");
+  box.classList.remove("hidden");
+  box.innerHTML = "";
+  box.append(el("h3", {}, `Path test: near ${sourceIp} → ${dest}`));
+  if (res.status === "pending") {
+    box.append(el("p", { class: "muted" }, "Measuring… this can take up to a minute."));
+  } else if (res.status === "ok") {
+    const reachTxt = res.reachable === true ? "yes" : res.reachable === false ? "no" : "unknown";
+    box.append(el("p", {}, `Reachable: ${reachTxt}`));
+    if (res.avg_ms != null) box.append(el("p", {}, `Avg latency: ${res.avg_ms} ms`));
+    if (res.probe_id != null) box.append(el("p", {}, `Probe: #${res.probe_id} (AS${res.probe_asn || "?"})`));
+  } else if (res.status === "no_nearby_probe") {
+    box.append(el("p", {}, "No RIPE Atlas probe was found near this IP's network."));
+  } else {
+    box.append(el("p", {}, "Measurement unavailable."));
+  }
+  box.append(el("p", { class: "proximity-note" },
+    res.note || "Approximate — measured from the nearest available RIPE Atlas probe to this IP's network, not from the IP itself."));
+}
 
 // ---- history + trend chart ----------------------------------------------
 async function loadHistory() {

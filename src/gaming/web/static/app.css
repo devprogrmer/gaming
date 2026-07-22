@@ -100,3 +100,16 @@ tbody tr:hover { background: var(--panel-2); }
 
 .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(220px, 320px)); gap: 12px; margin: 12px 0; }
 .settings-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+
+/* Per-CIDR sequential scan sections */
+.cidr-block { border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin: 12px 0; }
+.cidr-block h3 { margin: 0 0 8px; font-family: var(--mono); font-size: 14px; }
+.cidr-block .counts { margin: 4px 0 10px; }
+
+/* Row action buttons (e.g. "Test path to…") */
+.row-btn { background: var(--panel-2); color: var(--fg); border: 1px solid var(--border); padding: 2px 8px; font-size: 11px; border-radius: 4px; cursor: pointer; }
+
+/* Proximity-ping result panel — the approximation note must always be visible */
+#proximity-result { border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin: 12px 0; }
+#proximity-result h3 { margin: 0 0 8px; font-size: 14px; }
+.proximity-note { color: var(--muted); font-size: 11px; margin-top: 8px; font-style: italic; }

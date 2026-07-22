@@ -296,8 +296,11 @@ def test_serve_prints_credentials_and_url_then_runs(tmp_path, monkeypatch):
             self.socket = object()
             self.address = addr
 
-        def serve_forever(self):
+        def serve_forever(self, poll_interval=0.5):
             started["served"] = True
+
+        def shutdown(self):
+            pass
 
         def server_close(self):
             started["closed"] = True
@@ -318,6 +321,71 @@ def test_serve_prints_credentials_and_url_then_runs(tmp_path, monkeypatch):
     assert "shown ONCE" in out
     # The reachable URL (detected server IP + chosen port) is printed.
     assert "http://203.0.113.7:31337/" in out
+
+
+def test_serve_ctrl_c_shuts_down_gracefully(tmp_path, monkeypatch):
+    """Ctrl+C must fully stop the server loop (via shutdown()) before the
+    listening socket is closed, not just print a message and bail out.
+
+    Regression guard: the old code caught KeyboardInterrupt around a
+    same-thread serve_forever() and immediately closed the socket, so a
+    request that was mid-flight on the server's own thread was never given a
+    chance to finish. Here the fake server actually blocks (like the real
+    ThreadingHTTPServer) until shutdown() is called, proving serve() waits for
+    the loop to stop before closing the socket.
+    """
+    import threading
+    import time
+
+    from gaming.web import server
+
+    events: list[str] = []
+
+    class _FakeHTTPD:
+        def __init__(self, addr, handler):
+            self.socket = object()
+            self._stop_flag = False
+
+        def serve_forever(self, poll_interval=0.5):
+            while not self._stop_flag:
+                time.sleep(0.01)
+            events.append("loop_exited")
+
+        def shutdown(self):
+            events.append("shutdown_called")
+            self._stop_flag = True
+
+        def server_close(self):
+            events.append("closed")
+
+    monkeypatch.setattr(server, "ThreadingHTTPServer", _FakeHTTPD)
+    monkeypatch.setattr(server, "_pick_free_port", lambda bind: 31338)
+    monkeypatch.setattr(server, "_detect_server_ip", lambda: "203.0.113.8")
+
+    # Simulate Ctrl+C on serve()'s own wait loop specifically (it always waits
+    # with timeout=0.5), not on unrelated Event.wait calls elsewhere -- e.g.
+    # Thread.start() itself blocks on an internal Event with no timeout.
+    triggered = {"done": False}
+    orig_wait = threading.Event.wait
+
+    def _fake_wait(self, timeout=None):
+        if timeout == 0.5 and not triggered["done"]:
+            triggered["done"] = True
+            raise KeyboardInterrupt
+        return orig_wait(self, timeout)
+
+    monkeypatch.setattr(threading.Event, "wait", _fake_wait)
+
+    lines: list[str] = []
+    rc = server.serve(bind="0.0.0.0", print_fn=lines.append)
+
+    assert rc == 0
+    # shutdown() must run, the loop must exit, THEN the socket closes -- in
+    # that order -- rather than closing the socket out from under the loop.
+    assert events == ["shutdown_called", "loop_exited", "closed"]
+    out = "\n".join(lines)
+    assert "Shutting down dashboard" in out
+    assert "Dashboard stopped." in out
 
 
 # ---- Iran-only location gate (web scan) ----------------------------------
@@ -370,6 +438,189 @@ def test_web_scan_iran_category_excludes_non_ir_located(env, monkeypatch):
     assert "5.5.5.0/24" in result["result"]["location_unverified"]
     assert not any(h.startswith("5.5.5.") for h in scanned)
     assert any(h.startswith("185.51.200.") for h in scanned)
+
+
+def _poll_job_done(app, cookie, job_id, tries=200):
+    import time
+
+    for _ in range(tries):
+        resp = app.handle(_req("GET", f"/api/jobs?id={job_id}", cookie=cookie))
+        job = json.loads(resp.body)
+        if job["status"] in ("done", "error"):
+            return job
+        time.sleep(0.02)
+    raise AssertionError("job did not finish in time")
+
+
+# ---- scan mode: all-together (combined) vs one-at-a-time (sequential) -----
+def test_web_scan_sequential_mode_groups_per_cidr_and_persists_one_scan(env, monkeypatch):
+    """'Scan one at a time' runs each CIDR as its own step of a single job,
+    grouping results per CIDR, and still persists one combined scan at the end
+    so the existing export-by-scan-id endpoints work unchanged."""
+    app, creds, pw = env
+    cookie = _login(app, creds, pw)
+
+    from gaming.interactive import scanner as scanner_mod
+
+    calls: list[list[str]] = []
+
+    def _fake_run_scan(scope, settings, *, hosts=None, on_result=None):
+        calls.append(list(hosts))
+        p = ProbeResult(hosts[0], sent=4, received=4, avg_ms=10.0)
+        return scanner_mod.ScanReport(
+            scope=scope, results=[(p, GOOD)], combined=[CombinedResult(p)]
+        )
+
+    monkeypatch.setattr(scanner_mod, "run_scan", _fake_run_scan)
+
+    start = app.handle(
+        _req(
+            "POST",
+            "/api/scan",
+            body={"cidrs": ["185.1.1.0/30", "185.2.2.0/30"], "mode": "sequential"},
+            cookie=cookie,
+        )
+    )
+    job_id = json.loads(start.body)["job_id"]
+    job = _poll_job_done(app, cookie, job_id)
+
+    assert job["status"] == "done"
+    res = job["result"]
+    assert res["mode"] == "sequential"
+    assert res["cidrs_total"] == 2
+    assert res["cidrs_done"] == 2
+    assert [b["cidr"] for b in res["per_cidr"]] == ["185.1.1.0/30", "185.2.2.0/30"]
+    assert all(b["error"] is None for b in res["per_cidr"])
+    # Each CIDR was scanned as its own step, in order (sequential, not merged).
+    assert len(calls) == 2
+    assert all(h.startswith("185.1.1.") for h in calls[0])
+    assert all(h.startswith("185.2.2.") for h in calls[1])
+    # One combined scan was persisted -- existing export/download by scan_id
+    # keeps working the same way regardless of which mode produced it.
+    assert res["scan_id"] is not None
+    rows = app.store.get_results(res["scan_id"])
+    assert len(rows) == 2
+
+
+def test_web_scan_sequential_mode_one_cidr_failure_does_not_abort_others(env, monkeypatch):
+    """Fail-soft: one CIDR's scan blowing up must not stop the rest of the
+    queue, matching the project's fail-soft convention everywhere else."""
+    app, creds, pw = env
+    cookie = _login(app, creds, pw)
+
+    from gaming.interactive import scanner as scanner_mod
+
+    def _fake_run_scan(scope, settings, *, hosts=None, on_result=None):
+        if hosts and hosts[0].startswith("185.1."):
+            raise RuntimeError("boom")
+        p = ProbeResult(hosts[0], sent=4, received=4, avg_ms=10.0)
+        return scanner_mod.ScanReport(
+            scope=scope, results=[(p, GOOD)], combined=[CombinedResult(p)]
+        )
+
+    monkeypatch.setattr(scanner_mod, "run_scan", _fake_run_scan)
+
+    start = app.handle(
+        _req(
+            "POST",
+            "/api/scan",
+            body={"cidrs": ["185.1.1.0/30", "185.2.2.0/30"], "mode": "sequential"},
+            cookie=cookie,
+        )
+    )
+    job_id = json.loads(start.body)["job_id"]
+    job = _poll_job_done(app, cookie, job_id)
+
+    assert job["status"] == "done"
+    res = job["result"]
+    # Both CIDRs were attempted; the queue was not aborted by the failure.
+    assert res["cidrs_done"] == 2
+    assert res["per_cidr"][0]["cidr"] == "185.1.1.0/30"
+    assert res["per_cidr"][0]["error"] is not None
+    assert res["per_cidr"][1]["cidr"] == "185.2.2.0/30"
+    assert res["per_cidr"][1]["error"] is None
+    # The surviving CIDR's results were still persisted.
+    assert res["scan_id"] is not None
+
+
+def test_web_scan_combined_mode_is_default_and_unaffected_by_mode_field(env, monkeypatch):
+    """A request with no 'mode' (or mode='combined') keeps the original
+    single-job, single-table behaviour -- the regression guard for Item 3."""
+    app, creds, pw = env
+    cookie = _login(app, creds, pw)
+
+    from gaming.interactive import scanner as scanner_mod
+
+    def _fake_run_scan(scope, settings, *, hosts=None, on_result=None):
+        rows = [(ProbeResult(h, sent=4, received=4, avg_ms=5.0), GOOD) for h in hosts]
+        combined = [CombinedResult(p) for p, _v in rows]
+        return scanner_mod.ScanReport(scope=scope, results=rows, combined=combined)
+
+    monkeypatch.setattr(scanner_mod, "run_scan", _fake_run_scan)
+
+    start = app.handle(
+        _req(
+            "POST",
+            "/api/scan",
+            body={"cidrs": ["185.1.1.0/30", "185.2.2.0/30"]},
+            cookie=cookie,
+        )
+    )
+    job_id = json.loads(start.body)["job_id"]
+    job = _poll_job_done(app, cookie, job_id)
+
+    assert job["status"] == "done"
+    res = job["result"]
+    assert res["mode"] == "combined"
+    assert "per_cidr" not in res
+    assert len(res["results"]) == 4  # both /30s expanded and scanned together
+    assert res["scan_id"] is not None
+
+
+# ---- proximity ping ("Test path to…") -------------------------------------
+def test_web_proximity_ping_ok(env, monkeypatch):
+    app, creds, pw = env
+    cookie = _login(app, creds, pw)
+
+    from gaming.reachability import global_check as gc
+
+    monkeypatch.setenv("GAMING_RIPE_ATLAS_KEY", "k")
+    monkeypatch.setattr(
+        gc,
+        "measure_from_near",
+        lambda source_ip, destination_ip, **kw: gc.ProximityPingResult(
+            status=gc.PROXIMITY_OK, probe_id=111, probe_asn="12345", avg_ms=42.0, reachable=True
+        ),
+    )
+
+    start = app.handle(
+        _req(
+            "POST",
+            "/api/proximity-ping",
+            body={"source_ip": "185.1.1.1", "destination_ip": "8.8.8.8"},
+            cookie=cookie,
+        )
+    )
+    job_id = json.loads(start.body)["job_id"]
+    job = _poll_job_done(app, cookie, job_id)
+
+    assert job["status"] == "done"
+    res = job["result"]
+    assert res["status"] == "ok"
+    assert res["probe_id"] == 111
+    assert res["avg_ms"] == 42.0
+    # The approximation disclaimer must be present in every result.
+    assert "Approximate" in res["note"]
+    assert "not from the IP itself" in res["note"]
+
+
+def test_web_proximity_ping_requires_both_ips(env):
+    app, creds, pw = env
+    cookie = _login(app, creds, pw)
+    resp = app.handle(
+        _req("POST", "/api/proximity-ping", body={"source_ip": "1.2.3.4"}, cookie=cookie)
+    )
+    assert resp.status == 400
 
 
 # ---- static + auth-store units -------------------------------------------

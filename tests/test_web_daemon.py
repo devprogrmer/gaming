@@ -164,8 +164,11 @@ def test_daemonize_writes_pid_and_serves(tmp_path, monkeypatch):
         def __init__(self, addr, handler):
             self.socket = object()
 
-        def serve_forever(self):
+        def serve_forever(self, poll_interval=0.5):
             events.append("served")
+
+        def shutdown(self):
+            pass
 
         def server_close(self):
             events.append("closed")

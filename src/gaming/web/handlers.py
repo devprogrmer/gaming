@@ -181,6 +181,7 @@ class WebApp:
         self.route("POST", "/api/settings", _save_settings)
         self.route("GET", "/api/summary", _summary)
         self.route("GET", "/api/export", _export)  # ?kind=csv|json|whitelist&scan=...
+        self.route("POST", "/api/proximity-ping", _start_proximity_ping)
 
 
 def _redirect(location: str) -> Response:
@@ -309,40 +310,67 @@ def _get_job(app: WebApp, req: Request) -> Response:
 # --------------------------------------------------------------------------
 # Scan (bidirectional) — synchronous-per-request but hosts are bounded
 # --------------------------------------------------------------------------
+_SCAN_MODE_COMBINED = "combined"
+_SCAN_MODE_SEQUENTIAL = "sequential"
+
+
 def _run_scan(app: WebApp, req: Request) -> Response:
     data = req.json()
     cidrs = data.get("cidrs")
     category = str(data.get("category", ""))
+    mode = str(data.get("mode", _SCAN_MODE_COMBINED)).strip().lower()
+    if mode not in (_SCAN_MODE_COMBINED, _SCAN_MODE_SEQUENTIAL):
+        mode = _SCAN_MODE_COMBINED
 
-    def _work(job) -> dict[str, Any]:
-        return _scan_and_store(app, cidrs, category)
+    if mode == _SCAN_MODE_SEQUENTIAL:
+        def _work(job) -> dict[str, Any]:
+            return _scan_sequential_and_store(app, cidrs, category, job)
 
-    job = app.jobs.start("scan", _work, meta={"category": category})
+        job = app.jobs.start(
+            "scan-sequential", _work, meta={"category": category, "mode": mode}
+        )
+    else:
+        def _work(job) -> dict[str, Any]:
+            return _scan_and_store(app, cidrs, category)
+
+        job = app.jobs.start("scan", _work, meta={"category": category, "mode": mode})
     return Response.json({"job_id": job.id})
 
 
-def _scan_and_store(app: WebApp, cidrs: Any, category: str) -> dict[str, Any]:
+def _resolve_cidrs(cidrs: Any, category: str) -> tuple[list[str], list[str]]:
+    """Resolve the request's ``cidrs``/``category`` into a scan list.
+
+    Shared by both scan modes. Returns ``(cidr_list, unverified_iran)`` — the
+    second element lists CIDRs excluded from an Iran-origin category scan
+    because they aren't verified as IR-located (foreign PoPs/anycast edges
+    saved under an Iranian provider), surfaced separately rather than silently
+    scanned as "Iranian".
+    """
     from ..interactive import ranges as ranges_mod
-    from ..interactive import scanner
-    from ..interactive.settings import load_settings
     from ..processing.filters import partition_by_country
 
-    settings = load_settings()
     cidr_list: list[str] = []
     unverified_iran: list[str] = []
     if isinstance(cidrs, list):
         cidr_list = [str(c) for c in cidrs]
     elif category in ranges_mod.CATEGORIES:
         entries = ranges_mod.category_entries(category)
-        # An Iran-origin category scan must only include CIDRs verified as
-        # IR-located; foreign PoPs/anycast edges saved under an Iranian provider
-        # are reported separately rather than silently scanned as "Iranian".
         if category.startswith("iran"):
             part = partition_by_country(entries, "IR")
             cidr_list = [e.cidr for e in part.matched]
             unverified_iran = [e.cidr for e in part.unverified]
         else:
             cidr_list = [e.cidr for e in entries]
+    return cidr_list, unverified_iran
+
+
+def _scan_and_store(app: WebApp, cidrs: Any, category: str) -> dict[str, Any]:
+    from ..interactive import ranges as ranges_mod
+    from ..interactive import scanner
+    from ..interactive.settings import load_settings
+
+    settings = load_settings()
+    cidr_list, unverified_iran = _resolve_cidrs(cidrs, category)
 
     hosts = ranges_mod.expand_hosts(
         cidr_list,
@@ -353,11 +381,90 @@ def _scan_and_store(app: WebApp, cidrs: Any, category: str) -> dict[str, Any]:
     scan_id = scanner.persist(report, app.store)
     rows = [_combined_row(report, c) for c in report.combined]
     return {
+        "mode": _SCAN_MODE_COMBINED,
         "scan_id": scan_id,
         "counts": report.combined_counts,
         "results": rows,
         "location_unverified": unverified_iran,
     }
+
+
+def _scan_sequential_and_store(
+    app: WebApp, cidrs: Any, category: str, job: Any
+) -> dict[str, Any]:
+    """Scan each matched CIDR as its own sequential step (one job overall).
+
+    Each CIDR's scan runs to completion before the next starts. ``job.result``
+    is updated after every CIDR so a client polling ``GET /api/jobs`` sees
+    per-CIDR progress and results as they arrive, not just at the very end. A
+    failure scanning one CIDR is recorded against that CIDR only (fail-soft) —
+    it never aborts the remaining queued CIDRs. All hosts across every CIDR are
+    still persisted as a single scan at the end, so the existing
+    scan-id-based export/download endpoints work unchanged in this mode too.
+    """
+    from ..interactive import ranges as ranges_mod
+    from ..interactive import scanner
+    from ..interactive.settings import load_settings
+
+    settings = load_settings()
+    cidr_list, unverified_iran = _resolve_cidrs(cidrs, category)
+
+    per_cidr: list[dict[str, Any]] = []
+    all_results: list = []
+    all_combined: list = []
+    total = len(cidr_list)
+
+    def _snapshot(
+        scan_id: int | None = None, counts: dict | None = None
+    ) -> dict[str, Any]:
+        return {
+            "mode": _SCAN_MODE_SEQUENTIAL,
+            "per_cidr": list(per_cidr),
+            "cidrs_total": total,
+            "cidrs_done": len(per_cidr),
+            "location_unverified": unverified_iran,
+            "scan_id": scan_id,
+            "counts": counts or {},
+        }
+
+    for cidr in cidr_list:
+        try:
+            hosts = ranges_mod.expand_hosts(
+                [cidr],
+                sample_per_range=settings.sample_per_range,
+                max_hosts=settings.max_hosts,
+            )
+            report = scanner.run_scan(category or "web", settings, hosts=hosts)
+            rows = [_combined_row(report, c) for c in report.combined]
+            per_cidr.append(
+                {
+                    "cidr": cidr,
+                    "counts": report.combined_counts,
+                    "results": rows,
+                    "error": None,
+                }
+            )
+            all_results.extend(report.results)
+            all_combined.extend(report.combined)
+        except Exception as exc:  # noqa: BLE001 - one bad CIDR must not stop the queue
+            log.warning(
+                "sequential scan of %s failed: %s: %s", cidr, type(exc).__name__, exc
+            )
+            per_cidr.append(
+                {"cidr": cidr, "counts": {}, "results": [], "error": str(exc)}
+            )
+        job.progress = len(per_cidr) / total if total else 1.0
+        job.result = _snapshot()
+
+    scan_id = None
+    counts: dict[str, int] = {}
+    if all_results:
+        aggregate = scanner.ScanReport(
+            scope=category or "web", results=all_results, combined=all_combined
+        )
+        scan_id = scanner.persist(aggregate, app.store)
+        counts = aggregate.combined_counts
+    return _snapshot(scan_id=scan_id, counts=counts)
 
 
 def _combined_row(report, c) -> dict[str, Any]:
@@ -513,6 +620,51 @@ def _row_to_record(row):
         note_bits.append(f"combined={row.combined_verdict}")
     rec.notes = "; ".join(note_bits)
     return rec
+
+
+# --------------------------------------------------------------------------
+# Proximity ping — explicitly separate, opt-in "test path to..." action
+# --------------------------------------------------------------------------
+def _start_proximity_ping(app: WebApp, req: Request) -> Response:
+    """Start an approximate proximity-ping job for a discovered IP's row.
+
+    Conceptually distinct from the bidirectional Iran/abroad reachability
+    columns: this asks the nearest available RIPE Atlas probe to the source
+    IP's network to ping an arbitrary destination the user chooses. It is
+    never the source IP's own ping — see
+    :func:`gaming.reachability.global_check.measure_from_near`.
+    """
+    data = req.json()
+    source_ip = str(data.get("source_ip", "")).strip()
+    destination_ip = str(data.get("destination_ip", "")).strip()
+    if not source_ip or not destination_ip:
+        return Response.json(
+            {"error": "source_ip and destination_ip are required"}, status=400
+        )
+
+    def _work(job) -> dict[str, Any]:
+        from ..reachability.global_check import measure_from_near
+
+        result = measure_from_near(source_ip, destination_ip)
+        return _proximity_result_dict(result)
+
+    job = app.jobs.start(
+        "proximity-ping",
+        _work,
+        meta={"source_ip": source_ip, "destination_ip": destination_ip},
+    )
+    return Response.json({"job_id": job.id})
+
+
+def _proximity_result_dict(result) -> dict[str, Any]:
+    return {
+        "status": result.status,
+        "probe_id": result.probe_id,
+        "probe_asn": result.probe_asn,
+        "avg_ms": result.avg_ms,
+        "reachable": result.reachable,
+        "note": result.note,
+    }
 
 
 def _record_dict(rec) -> dict[str, Any]:

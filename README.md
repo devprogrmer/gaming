@@ -124,7 +124,7 @@ PYTHONPATH=src python -m gaming --help
 
 ```
 ==================================================
-   devprogrmer * IP Health Scanner   (v0.5.0)
+   devprogrmer * IP Health Scanner   (v0.7.0)
 ==================================================
   1) Scan saved ranges (datacenter / CDN / both)
   2) Discover & save provider ranges
@@ -134,6 +134,7 @@ PYTHONPATH=src python -m gaming --help
   6) Update installed version
   7) Filter CIDRs by first octet
   8) Discover, save & scan a provider
+  9) Launch web panel
   0) Exit
 --------------------------------------------------
 ```
@@ -150,6 +151,7 @@ PYTHONPATH=src python -m gaming --help
 | **۶) Update installed version** | به‌روزرسانی درجای نسخهٔ نصب‌شده. |
 | **۷) Filter CIDRs by first octet** | کشف و فیلترِ پویا بر اساس اولین اکتت + دیتاسنتر. |
 | **۸) Discover, save & scan a provider** | یک ارائه‌دهندهٔ مشخص: کشف ← ذخیره ← اسکن، یک‌جا. |
+| **۹) Launch web panel** | اجرای همان داشبورد وب `gaming web` در همین پردازه (بدون subprocess)؛ گزینهٔ bind/port/tls را می‌پرسد و با Ctrl+C به‌صورت تمیز متوقف شده و به منو برمی‌گردد. |
 | **۰) Exit** | خروج از برنامه. |
 
 ### اجرای حالت خط‌فرمان (برای کاربران حرفه‌ای)
@@ -198,6 +200,59 @@ gaming web --tls
 # بازتولید نام کاربری/رمز و باطل‌کردن همهٔ نشست‌ها (مسیر بازیابی)
 gaming web --reset-credentials
 ```
+
+**Live Scan: اسکن همه‌باهم یا یکی‌یکی (scan mode):**
+
+صفحهٔ **Live Scan** پیش از شروعِ اسکن یک انتخاب صریح می‌دهد:
+
+- **Scan all together** (پیش‌فرض، رفتار قبلی) — یک Job واحد روی همهٔ CIDRهای منطبق،
+  یک جدولِ نتایجِ ترکیبی.
+- **Scan one at a time** — هر CIDR منطبق به‌عنوان یک گامِ مستقلِ همان Job واحد،
+  به‌ترتیب و پشت‌سرهم اسکن می‌شود (اسکنِ CIDR بعدی فقط پس از پایانِ قبلی شروع می‌شود).
+  پیشرفت و نتایجِ هر CIDR جداگانه و به‌محضِ آماده‌شدن (از طریق همان مکانیزمِ polling
+  موجود) نمایش داده می‌شود، نه فقط در پایانِ کار. اگر اسکنِ یک CIDR با خطا مواجه شود،
+  فقط همان CIDR به‌عنوان ناموفق علامت می‌خورد و بقیهٔ صف متوقف نمی‌شود (fail-soft).
+  در هر دو حالت، همهٔ CIDRهای اسکن‌شده در یک اسکنِ واحد ذخیره می‌شوند، بنابراین دکمه‌های
+  «Download whitelist IPs» و دانلود CSV/JSON در هر دو حالت یکسان کار می‌کنند.
+
+The Live Scan page now offers an explicit choice before starting: **"Scan all
+together"** (default, unchanged — one job, one combined table) or **"Scan one
+at a time"** (each matched CIDR runs as its own sequential step of the same
+job; per-CIDR progress/results appear as soon as each one finishes via the
+existing polling mechanism, and a failure in one CIDR never aborts the rest of
+the queue). Either way, all scanned CIDRs are persisted as a single scan, so
+the download/export buttons behave identically in both modes.
+
+**تست تقریبیِ مسیر به یک مقصدِ دلخواه (Proximity ping / RIPE Atlas):**
+
+اندازه‌گیریِ «پینگِ خودِ یک IP کشف‌شده به یک مقصد ثالث» از بیرون **ممکن نیست** — فقط
+مالکِ آن IP می‌تواند آن را وادار به ارسال ترافیک کند؛ این یک محدودیت این ابزار نیست،
+بلکه یک واقعیتِ بنیادیِ شبکه است. نزدیک‌ترین تقریبِ صادقانه: از **RIPE Atlas** (یک
+پلتفرمِ عمومیِ اندازه‌گیریِ اینترنت) خواسته می‌شود نزدیک‌ترین پروبِ خود به شبکهٔ آن IP
+(بر اساس تطبیقِ ASN) را پیدا کند و از همان پروب یک پینگِ یک‌بارهٔ به مقصدِ دلخواه بزند.
+
+روی هر ردیفِ نتیجهٔ اسکن، یک دکمهٔ **«Test path to…»** جداگانه و اختیاری وجود دارد
+(کاملاً مجزا از ستون‌های دسترس‌پذیریِ دوطرفهٔ ایران/خارج، چون مفهومِ متفاوتی را می‌سنجد).
+این قابلیت به همان `GAMING_RIPE_ATLAS_KEY` نیاز دارد؛ بدون کلید، پیامِ روشنِ «پیکربندی
+نشده» نمایش داده می‌شود. هر نتیجه — همیشه — با این هشدار همراه است:
+
+> «تقریبی — از نزدیک‌ترین پروبِ در دسترسِ RIPE Atlas به شبکهٔ این IP اندازه‌گیری شده،
+> نه از خودِ IP.»
+
+اگر هیچ پروبی نزدیکِ شبکهٔ آن IP نباشد، پیامِ روشنِ «no nearby probe available» نشان
+داده می‌شود — هرگز به‌جای آن از یک پروبِ نامرتبط استفاده نمی‌شود.
+
+Measuring a discovered IP's *own* ping to a third-party destination is not
+possible from the outside — only that IP's operator can make it originate
+traffic; this is a fact about networking, not a limitation of this tool. As
+the closest honest approximation, an opt-in **"Test path to…"** button on each
+scan row (kept explicitly separate from the Iran/abroad reachability columns)
+asks the nearest RIPE Atlas probe to that IP's network (by ASN match) to ping
+a destination you choose. Gated behind `GAMING_RIPE_ATLAS_KEY`; every result
+always carries the disclaimer "Approximate — measured from the nearest
+available RIPE Atlas probe to this IP's network, not from the IP itself," and
+a network with no nearby probe is reported as such, never silently swapped for
+an unrelated one.
 
 **نکات امنیتی (Security notes):**
 

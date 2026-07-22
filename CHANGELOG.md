@@ -6,6 +6,58 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-22
+
+### Added
+- **Launch the web panel from the interactive menu.** The main menu (`gaming` /
+  `gaming menu`) gained a new option, "Launch web panel", that starts the exact
+  same dashboard server as `gaming web` in-process (no subprocess). It prompts
+  for bind address / port / TLS the same way the CLI flags do, prints the
+  identical first-run credentials/URL/security banner (the CLI subcommand and
+  the menu action now both call the same `serve()` function — no duplicated
+  banner logic), and returns control to the menu loop once the panel is
+  stopped with Ctrl+C.
+- **Live Scan: choose "Scan all together" vs "Scan one at a time".** The web
+  dashboard's Live Scan page now offers an explicit choice before starting a
+  scan. "Scan all together" is the original behavior — one combined job, one
+  combined results table. "Scan one at a time" queues each matched CIDR as its
+  own sequential step of a single background job: each CIDR's scan completes
+  before the next starts, progress and results for each CIDR are reported
+  separately (as soon as they're available, via the existing job-status
+  polling — not just at the end), and a failure scanning one CIDR is recorded
+  against that CIDR only, never aborting the rest of the queue. All CIDRs
+  scanned in a given run — either mode — are still persisted as a single scan,
+  so the existing "download results" / "download whitelist IPs" export
+  buttons work identically regardless of which mode produced them.
+- **Approximate "test path to..." proximity ping (RIPE Atlas).** A live IP's
+  own outbound ping to an arbitrary third-party destination can't be measured
+  by a remote tool — only the operator of that IP can make it originate
+  traffic. As the closest honest approximation, `gaming.reachability.
+  global_check.measure_from_near(source_ip, destination_ip)` looks up the
+  source IP's origin ASN, finds a RIPE Atlas probe hosted in that same
+  network (if any), and asks that probe to ping the destination. Wired into
+  the web dashboard as an explicitly separate, opt-in "Test path to..." button
+  on a scan row — never merged into the existing Iran/abroad bidirectional
+  reachability columns, since it measures something conceptually different.
+  Gated behind the existing `GAMING_RIPE_ATLAS_KEY` config (a no-op with a
+  clear "not configured" message when unset); every result surfaced in the UI
+  carries the disclaimer "Approximate — measured from the nearest available
+  RIPE Atlas probe to this IP's network, not from the IP itself." A network
+  with no nearby probe is reported as "no nearby probe available", never
+  silently substituted with an unrelated probe.
+
+### Fixed
+- **Ctrl+C on `gaming web` (and the new menu launcher) now shuts down
+  gracefully.** Previously the server caught `KeyboardInterrupt` around a
+  same-thread `serve_forever()` and closed the listening socket immediately
+  afterward — there was no guarantee the request-serving loop had actually
+  finished. `serve_forever()` now runs on a background thread while the main
+  thread waits on an event (interruptible by Ctrl+C independent of the
+  server loop); on shutdown, `httpd.shutdown()` is called from the main
+  thread (required — calling it from the same thread that's running
+  `serve_forever()` deadlocks), the server thread is joined, and only then is
+  the socket closed.
+
 ## [0.6.0] - 2026-07-22
 
 ### Fixed

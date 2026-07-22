@@ -16,6 +16,7 @@ from .ranges_action import manage_ranges
 from .scan import discover_save_scan_provider, full_scan_hosts, scan_saved
 from .settings_action import edit_settings
 from .update_action import update_installed_version
+from .web_action import launch_web_panel
 
 __all__ = [
     "ActionContext",
@@ -29,4 +30,5 @@ __all__ = [
     "update_installed_version",
     "filter_by_first_octet",
     "auto_scan_matched",
+    "launch_web_panel",
 ]

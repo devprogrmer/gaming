@@ -40,9 +40,26 @@ log = get_logger("gaming.reachability.global")
 
 _BASE = "https://check-host.net"
 _ATLAS_BASE = "https://atlas.ripe.net/api/v2"
+_ATLAS_PROBES_URL = f"{_ATLAS_BASE}/probes/"
+_RIPESTAT_NETWORK_INFO = "https://stat.ripe.net/data/network-info/data.json?resource={ip}"
 
 #: Environment variable holding an optional RIPE Atlas API key. Never hardcoded.
 RIPE_ATLAS_KEY_ENV = "GAMING_RIPE_ATLAS_KEY"
+
+# Status values for measure_from_near()/ProximityPingResult — distinct from the
+# ABROAD_* constants because this measures something conceptually different
+# (a third-party probe's path to an arbitrary destination, not "is this host
+# reachable from outside Iran").
+PROXIMITY_OK = "ok"
+PROXIMITY_NO_PROBE = "no_nearby_probe"
+PROXIMITY_UNAVAILABLE = "unavailable"
+
+#: Must accompany every ProximityPingResult shown to a user — this is always an
+#: approximation, never a measurement literally made by the source IP itself.
+PROXIMITY_APPROXIMATION_NOTE = (
+    "Approximate — measured from the nearest available RIPE Atlas probe "
+    "to this IP's network, not from the IP itself."
+)
 
 # Abroad-check status values. Distinct so a user watching results over time can
 # tell "the service is down right now" apart from "this IP simply isn't
@@ -281,6 +298,168 @@ class RipeAtlasProvider(AbroadProvider):
                 reachable = (ok / total) >= min_ok_fraction
                 return AbroadResult.ok(reachable, ok, total)
         return AbroadResult.unavailable()
+
+
+@dataclass(slots=True)
+class ProximityPingResult:
+    """Approximate "ping from a discovered IP" result — see :func:`measure_from_near`.
+
+    This is NEVER the source IP's own ping. No external tool can make an
+    arbitrary third-party host originate a probe on our behalf; the closest
+    honest approximation is to ask the RIPE Atlas probe nearest to the source
+    IP's network to ping the destination. ``note`` carries that disclaimer and
+    must be surfaced with every result shown to a user.
+
+    ``status`` is one of :data:`PROXIMITY_OK`, :data:`PROXIMITY_NO_PROBE`
+    (no probe exists near the source IP's network), or
+    :data:`PROXIMITY_UNAVAILABLE` (not configured, or the measurement could not
+    be completed) — never a silently wrong number.
+    """
+
+    status: str
+    probe_id: int | None = None
+    probe_asn: str | None = None
+    avg_ms: float | None = None
+    reachable: bool | None = None
+    note: str = PROXIMITY_APPROXIMATION_NOTE
+
+    @classmethod
+    def unavailable(cls, reason: str = "") -> ProximityPingResult:
+        note = PROXIMITY_APPROXIMATION_NOTE
+        if reason:
+            note = f"{note} ({reason})"
+        return cls(status=PROXIMITY_UNAVAILABLE, note=note)
+
+    @classmethod
+    def no_nearby_probe(cls) -> ProximityPingResult:
+        return cls(
+            status=PROXIMITY_NO_PROBE,
+            note=(
+                f"{PROXIMITY_APPROXIMATION_NOTE} "
+                "No RIPE Atlas probe was found near this IP's network."
+            ),
+        )
+
+
+def measure_from_near(
+    source_ip: str,
+    destination_ip: str,
+    *,
+    timeout: float = 15.0,
+    api_key: str | None = None,
+    poll_attempts: int = 5,
+    poll_interval: float = 3.0,
+) -> ProximityPingResult:
+    """Best-effort: find the RIPE Atlas probe(s) nearest to ``source_ip``
+    (by ASN match against the RIPE Atlas probe metadata API) and request a
+    one-off ping measurement from that probe to ``destination_ip``. Returns
+    latency/loss if a nearby probe exists and the measurement completes;
+    returns a clear "no nearby probe available" / "measurement unavailable"
+    result otherwise — never a silently wrong number.
+
+    This is an approximation, NOT literally the discovered IP's own ping: a
+    remote tool cannot make a third party's host originate traffic. The
+    returned :class:`ProximityPingResult` always carries that disclaimer in
+    its ``note``. Gated behind :data:`RIPE_ATLAS_KEY_ENV` (or ``api_key``); with
+    no key it is a no-op returning ``unavailable`` with a "not configured"
+    reason.
+    """
+    key = api_key or os.environ.get(RIPE_ATLAS_KEY_ENV) or None
+    if not key:
+        return ProximityPingResult.unavailable("RIPE Atlas API key not configured")
+
+    try:
+        ipaddress.ip_address(source_ip)
+        dest_af = ipaddress.ip_address(destination_ip).version
+    except ValueError:
+        return ProximityPingResult.unavailable("invalid IP address")
+
+    # 1) Map the source IP to its origin ASN so we can search for probes in the
+    #    same network. A network error here is "unavailable" (we couldn't check),
+    #    distinct from "no probe near it".
+    try:
+        net_info = get_json(_RIPESTAT_NETWORK_INFO.format(ip=source_ip), timeout=timeout)
+    except HTTPError as exc:
+        log.debug("RIPEstat network-info lookup failed for %s: %s", source_ip, exc)
+        return ProximityPingResult.unavailable(
+            "could not determine the source IP's network"
+        )
+
+    asns = []
+    if isinstance(net_info, dict):
+        asns = ((net_info.get("data") or {}).get("asns")) or []
+    if not asns:
+        return ProximityPingResult.no_nearby_probe()
+    asn = str(asns[0])
+
+    # 2) Look for a connected RIPE Atlas probe hosted in that ASN.
+    probe_key = "asn_v6" if dest_af == 6 else "asn_v4"
+    try:
+        probes = get_json(
+            f"{_ATLAS_PROBES_URL}?{probe_key}={asn}&status=1&key={key}", timeout=timeout
+        )
+    except HTTPError as exc:
+        log.debug("RIPE Atlas probe search failed for AS%s: %s", asn, exc)
+        return ProximityPingResult.unavailable("probe search failed")
+
+    probe_list = probes.get("results") if isinstance(probes, dict) else None
+    if not probe_list:
+        return ProximityPingResult.no_nearby_probe()
+    probe_id = probe_list[0].get("id") if isinstance(probe_list[0], dict) else None
+    if probe_id is None:
+        return ProximityPingResult.no_nearby_probe()
+
+    # 3) Ask exactly that probe to ping the destination (one-off).
+    create_url = f"{_ATLAS_BASE}/measurements/?key={key}"
+    payload = {
+        "definitions": [
+            {
+                "target": destination_ip,
+                "af": dest_af,
+                "type": "ping",
+                "description": "gaming proximity ping (approximate)",
+                "packets": 3,
+            }
+        ],
+        "probes": [{"requested": 1, "type": "probes", "value": str(probe_id)}],
+        "is_oneoff": True,
+    }
+    try:
+        created = post_json(create_url, payload, timeout=timeout)
+    except HTTPError as exc:
+        log.debug("RIPE Atlas proximity measurement create failed: %s", exc)
+        return ProximityPingResult.unavailable("measurement could not be started")
+
+    ids = created.get("measurements") if isinstance(created, dict) else None
+    if not ids:
+        return ProximityPingResult.unavailable("measurement could not be started")
+    measurement_id = ids[0]
+
+    result_url = f"{_ATLAS_BASE}/measurements/{measurement_id}/results/?key={key}"
+    for _ in range(max(1, poll_attempts)):
+        time.sleep(poll_interval)
+        try:
+            results = get_json(result_url, timeout=timeout)
+        except HTTPError as exc:
+            log.debug("RIPE Atlas proximity poll failed: %s", exc)
+            continue
+        if isinstance(results, list) and results and isinstance(results[0], dict):
+            entry = results[0]
+            rcvd = entry.get("rcvd")
+            avg = entry.get("avg")
+            if rcvd is not None or avg is not None:
+                reachable = (isinstance(rcvd, int) and rcvd > 0) or (
+                    isinstance(avg, (int, float)) and avg > 0
+                )
+                avg_ms = avg if isinstance(avg, (int, float)) and avg > 0 else None
+                return ProximityPingResult(
+                    status=PROXIMITY_OK,
+                    probe_id=probe_id,
+                    probe_asn=asn,
+                    avg_ms=avg_ms,
+                    reachable=reachable,
+                )
+    return ProximityPingResult.unavailable("measurement did not complete in time")
 
 
 def combine_results(

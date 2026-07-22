@@ -68,6 +68,8 @@
             <option value="foreign_datacenter">foreign_datacenter</option>
             <option value="foreign_cdn">foreign_cdn</option>
           </select>
+          <label class="chk"><input type="radio" name="scan-mode" value="combined" checked /> Scan all together</label>
+          <label class="chk"><input type="radio" name="scan-mode" value="sequential" /> Scan one at a time</label>
           <button id="scan-btn">Scan saved ranges</button>
           <label class="chk"><input type="checkbox" id="whitelist-only" /> whitelist only</label>
           <button id="dl-whitelist" class="secondary" disabled>Download whitelist IPs</button>
@@ -75,6 +77,8 @@
         <p id="scan-status" class="muted"></p>
         <div id="scan-counts" class="counts"></div>
         <div class="table-wrap"><table id="scan-table"></table></div>
+        <div id="scan-sequential-wrap" class="hidden"></div>
+        <div id="proximity-result" class="hidden"></div>
       </section>
 
       <!-- History -->
