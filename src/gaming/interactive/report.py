@@ -10,6 +10,7 @@ from __future__ import annotations
 import sys
 from typing import TextIO
 
+from . import theme
 from .classify import BAD, GOOD, MEDIUM, classify_bidirectional
 from .progress import colorize
 from .scanner import ScanReport
@@ -95,33 +96,22 @@ def render_group_latency(groups: list, *, title: str = "COUNTRY") -> str:
     if not groups:
         return "No live results to group by latency.\n"
 
-    headers = [title, "LIVE", "AVG(ms)"]
-    body = [
-        [
-            g.key,
-            f"{g.live}/{g.total}",
-            _fmt_ms(g.avg_ms),
-        ]
-        for g in groups
+    columns = [
+        theme.Column(title),
+        theme.Column("LIVE", align="right"),
+        theme.Column("AVG(ms)", align="right"),
     ]
-    widths = [
-        max(len(headers[i]), *(len(row[i]) for row in body)) for i in range(len(headers))
-    ]
-
-    def fmt(cells: list[str]) -> str:
-        return "  ".join(cells[i].ljust(widths[i]) for i in range(len(cells)))
-
-    lines = [fmt(headers), "  ".join("-" * w for w in widths)]
-    lines.extend(fmt(row) for row in body)
+    body = [[g.key, f"{g.live}/{g.total}", _fmt_ms(g.avg_ms)] for g in groups]
+    out = theme.render_table(columns, body)
 
     # Call out the winner explicitly when at least one group has a measurement.
     best = next((g for g in groups if g.avg_ms is not None), None)
     if best is not None:
-        lines.append(
+        out += (
             f"\nLowest latency from here: {best.key} "
-            f"({best.avg_ms:.1f} ms avg over {best.live} live host(s))."
+            f"({best.avg_ms:.1f} ms avg over {best.live} live host(s)).\n"
         )
-    return "\n".join(lines) + "\n"
+    return out
 
 
 def render_results(
@@ -144,12 +134,19 @@ def render_results(
         return "No results.\n"
 
     show_ports = any(r.open_ports for r in shown)
-    headers = ["HOST", "HEALTH", "AVG(ms)", "LOSS", "RECV/SENT", "ABROAD", "WHITELIST"]
+    columns = [
+        theme.Column("HOST"),
+        theme.Column("HEALTH", style_fn=theme.verdict_style),
+        theme.Column("AVG(ms)", align="right"),
+        theme.Column("LOSS", align="right"),
+        theme.Column("RECV/SENT", align="right"),
+        theme.Column("ABROAD"),
+        theme.Column("WHITELIST", style_fn=theme.verdict_style),
+    ]
     if show_ports:
-        headers.append("PORTS")
+        columns.append(theme.Column("PORTS"))
 
     body = []
-    combined_col = headers.index("WHITELIST")
     for r in shown:
         cells = [
             r.host,
@@ -164,25 +161,10 @@ def render_results(
             cells.append(_fmt_ports(r))
         body.append(cells)
 
-    widths = [
-        max(len(headers[i]), *(len(row[i]) for row in body)) for i in range(len(headers))
-    ]
-
-    def fmt_row(cells: list[str], colored: bool) -> str:
-        out = []
-        for i, cell in enumerate(cells):
-            text = cell.ljust(widths[i])
-            # Colour the HEALTH (1) and WHITELIST (combined) columns.
-            if colored and i in (1, combined_col):
-                text = text.replace(cell, colorize(cell, stream))
-            out.append(text)
-        return "  ".join(out)
-
-    lines = [fmt_row(headers, False), "  ".join("-" * w for w in widths)]
-    lines.extend(fmt_row(row, True) for row in body)
+    out = theme.render_table(columns, body, stream=stream)
     if limit is not None and len(rows) > limit:
-        lines.append(f"... and {len(rows) - limit} more (see full history).")
-    return "\n".join(lines) + "\n"
+        out += f"... and {len(rows) - limit} more (see full history).\n"
+    return out
 
 
 def render_report(report: ScanReport, stream: TextIO | None = None) -> str:
@@ -220,7 +202,15 @@ def render_history(scans: list[ScanSummary]) -> str:
     """Render a list of saved scans as a compact table."""
     if not scans:
         return "No saved scans yet.\n"
-    headers = ["ID", "WHEN (UTC)", "SCOPE", "TOTAL", "GOOD", "MED", "BAD"]
+    columns = [
+        theme.Column("ID", align="right"),
+        theme.Column("WHEN (UTC)"),
+        theme.Column("SCOPE"),
+        theme.Column("TOTAL", align="right"),
+        theme.Column("GOOD", align="right"),
+        theme.Column("MED", align="right"),
+        theme.Column("BAD", align="right"),
+    ]
     body = [
         [
             str(s.id),
@@ -233,13 +223,4 @@ def render_history(scans: list[ScanSummary]) -> str:
         ]
         for s in scans
     ]
-    widths = [
-        max(len(headers[i]), *(len(row[i]) for row in body)) for i in range(len(headers))
-    ]
-
-    def fmt(cells: list[str]) -> str:
-        return "  ".join(cells[i].ljust(widths[i]) for i in range(len(cells)))
-
-    lines = [fmt(headers), "  ".join("-" * w for w in widths)]
-    lines.extend(fmt(row) for row in body)
-    return "\n".join(lines) + "\n"
+    return theme.render_table(columns, body)

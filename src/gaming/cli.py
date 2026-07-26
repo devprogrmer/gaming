@@ -313,8 +313,25 @@ def cmd_menu(args: argparse.Namespace, config: Config) -> int:
 
 
 def cmd_sources(args: argparse.Namespace, config: Config) -> int:
+    import sys as _sys
+
+    from .discovery import REGISTRY
+    from .interactive import theme
+
+    columns = [theme.Column("SOURCE"), theme.Column("DESCRIPTION")]
+    rows = []
     for name in available_sources():
-        sys.stdout.write(f"{name}\n")
+        cls = REGISTRY.get(name)
+        # The one-line summary lives in the source *module*'s docstring; the
+        # classes themselves are undocumented.
+        module = _sys.modules.get(getattr(cls, "__module__", ""), None)
+        doc = ((getattr(module, "__doc__", "") or "").strip().splitlines() or [""])[0]
+        # Docstrings are reStructuredText; ``literal`` markup is noise here.
+        rows.append([name, doc.replace("``", "").rstrip(".") or "-"])
+
+    sys.stdout.write(theme.heading("Discovery sources", sys.stdout) + "\n")
+    sys.stdout.write(theme.render_table(columns, rows, stream=sys.stdout))
+
     # Surface how stale the bundled provider seed data is (Part F marker).
     try:
         from .interactive.providers import seed_last_validated
@@ -323,8 +340,13 @@ def cmd_sources(args: argparse.Namespace, config: Config) -> int:
     except Exception:  # noqa: BLE001 - informational only, never fail `sources`
         stamp = ""
     sys.stdout.write(
-        f"\nseed data last validated: {stamp or 'never'} "
-        "(run 'gaming validate-seed')\n"
+        "\n"
+        + theme.key_value(
+            "seed data last validated:",
+            f"{stamp or 'never'} (run 'gaming validate-seed')",
+            stream=sys.stdout,
+        )
+        + "\n"
     )
     return 0
 
@@ -527,21 +549,51 @@ def cmd_validate_seed(args: argparse.Namespace, config: Config) -> int:
 
 def _print_seed_checks(checks: list) -> None:
     """Shared reporting for refresh-seeds / validate-seed."""
+    from .interactive import theme
+
+    out = sys.stdout
     checked = [c for c in checks if c.checked]
     stale = [c for c in checked if c.stale]
-    print(f"Validated {len(checked)}/{len(checks)} providers with a live lookup.")
+
+    print(theme.heading("Seed validation", out))
+    print(
+        theme.key_value(
+            "Validated:", f"{len(checked)}/{len(checks)} providers with a live lookup",
+            stream=out,
+        )
+    )
+
     if not stale:
-        print("No stale seed CIDRs detected.")
+        print(theme.style("No stale seed CIDRs detected.", "ok", out))
     else:
-        print(f"{sum(len(c.stale) for c in stale)} seed CIDR(s) look stale:")
-        for c in stale:
-            for cidr in c.stale:
-                print(f"  {c.name}: {cidr} not in any announced prefix")
+        total_stale = sum(len(c.stale) for c in stale)
+        print(
+            theme.style(f"{total_stale} seed CIDR(s) look stale:", "warn", out)
+        )
+        rows = [
+            [c.name, cidr, "not in any announced prefix"]
+            for c in stale
+            for cidr in c.stale
+        ]
+        print(
+            theme.render_table(
+                [theme.Column("PROVIDER"), theme.Column("CIDR"), theme.Column("REASON")],
+                rows,
+                stream=out,
+                indent="  ",
+            ),
+            end="",
+        )
+
     unchecked = [c for c in checks if not c.checked]
     if unchecked:
         print(
-            f"{len(unchecked)} provider(s) could not be checked "
-            "(no ASNs or lookup failed); left untouched."
+            theme.style(
+                f"{len(unchecked)} provider(s) could not be checked "
+                "(no ASNs or lookup failed); left untouched.",
+                "muted",
+                out,
+            )
         )
 
 

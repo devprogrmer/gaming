@@ -6,6 +6,135 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-26
+
+This release is about **real Ctrl+C reliability** plus a **visual/UX overhaul**
+across the web dashboard, the terminal UI, and the documentation.
+
+### Fixed
+- **Ctrl+C now actually shuts the web panel down cleanly — the 0.7.0 fix was
+  incomplete.** 0.7.0 moved `serve_forever()` onto a background thread and
+  wrapped the wait in `try/except KeyboardInterrupt`, which fixed the narrow
+  case it was tested against but left three real failure modes, each verified
+  by reproduction before this fix:
+
+  1. **`SIGTERM` got no cleanup at all.** `gaming web --stop` signals the
+     daemon with `SIGTERM` via the PID file, but `SIGTERM` does not raise
+     `KeyboardInterrupt` — so the `except` clause never ran. The process was
+     killed outright: no `shutdown()`, no `server_close()`, no PID-file
+     removal. Measured: exit in 0.00s with cleanup skipped entirely.
+  2. **In-flight scan jobs were abandoned mid-write.** `JobManager` exposed
+     only `start`/`get` — there was no way to enumerate, cancel, or join job
+     threads, and they were created `daemon=True`. On shutdown `serve()`
+     returned while a scan thread was still running, and the interpreter then
+     killed it at exit, potentially mid-SQLite-write. **This is the scenario
+     behind the "panel just dies" report**: pressing Ctrl+C during a Live Scan.
+  3. **A `KeyboardInterrupt` caught in one thread proves nothing about the
+     others.** The interrupt is delivered at an arbitrary bytecode boundary in
+     the main thread; catching it at a single call site said nothing about the
+     scheduler or job threads still touching the database.
+
+  Replaced with `gaming.web.lifecycle.ShutdownCoordinator`: a real
+  `signal.signal()` handler for both `SIGINT` and `SIGTERM` that stops the
+  listener from a separate thread (calling `shutdown()` from the
+  `serve_forever()` thread deadlocks), cancels and bounded-joins in-flight job
+  threads, stops the scan scheduler, releases the listening socket, removes the
+  PID file, and only then prints a final `Web panel stopped.` The handler
+  itself only sets a flag and returns — the multi-second drain happens on the
+  waiting thread, never inside a signal handler.
+
+  This is now the **single** shutdown path: `gaming web`, the interactive
+  menu's "Launch web panel" option, and `daemon.stop()`'s `SIGTERM` all route
+  through the same coordinator instead of three implementations that could
+  drift apart again.
+- **Background jobs are now cooperatively cancellable.** `Job.cancelled()`
+  lets long-running workers stop at a safe point; the sequential scan loop
+  polls it between CIDRs, so a shutdown mid-scan stops after the current CIDR
+  and still persists what it completed instead of being killed. Jobs that
+  ignore cancellation are bounded by a drain timeout and honestly reported
+  (`N background job(s) did not stop in time`) rather than silently dropped.
+- **An immediate restart on the same port works.** `server_close()` is now
+  guaranteed to run, so the listening socket is released and a restart no
+  longer risks "address already in use".
+- **`serve()` can no longer hang if the serve loop exits on its own.** The
+  loop now always releases the shutdown waiter in a `finally`, rather than
+  only on the error path — a latent hang caught by the new tests.
+- Repeated Ctrl+C escalates to an immediate exit (code 130) instead of leaving
+  the user waiting, and the previous signal handlers are restored afterwards
+  so the interactive menu keeps responding to Ctrl+C once the panel stops.
+- `daemon.stop()`'s grace period was raised from 5s to 15s so a clean drain is
+  not cut short by the `SIGKILL` escalation.
+
+### Changed
+- **Web dashboard visual overhaul.** Still stdlib-served with no build step, no
+  CDN, and no webfonts — it renders identically on an air-gapped host.
+  - A deliberate dark palette driven entirely by CSS custom properties in a
+    single `:root` block. Nothing below that block hardcodes a colour, so the
+    theme is retargetable from one place. One accent is used consistently for
+    primary actions, the active nav item, and focus rings.
+  - Monospace for operator data (hosts, CIDRs, ports, latency) and a sans stack
+    for UI chrome, on a 4px spacing rhythm.
+  - A persistent sidebar with a clear active-page indicator, plus a header
+    showing session identity and live connection status; related controls are
+    grouped into cards/panels instead of floating as bare form elements.
+  - Tables gained sticky headers for long result sets, subtle row banding and
+    hover, right-aligned tabular numerics for latency and node counts, and a
+    sort caret on the active column. Status values render as pill badges with
+    consistent colours across GOOD/MEDIUM/BAD and
+    INTERNATIONAL/IRAN_ONLY/ABROAD_ONLY/UNREACHABLE.
+  - Real empty, loading, and error states: placeholders that explain what to do
+    next rather than a blank table, a determinate progress bar driven by the
+    existing job-polling `progress` field (indeterminate until a fraction is
+    known), and styled banners instead of raw error strings. A scan interrupted
+    by shutdown now reports the new `cancelled` job status explicitly.
+  - Responsive down to narrow desktop widths: the sidebar folds into a
+    horizontal top nav rather than letting the content column collapse.
+  - Honours `prefers-reduced-motion`.
+
+  No endpoint, response shape, or behaviour changed — verified by the existing
+  test suite plus headless-browser rendering of every view.
+- **Terminal UI polish, on one shared renderer.** New
+  `gaming.interactive.theme` holds the ANSI palette (as semantic roles —
+  `title`, `prompt`, `muted`, `ok`, `warn`, `error`) and the single
+  column-aligned table used across the whole terminal experience.
+  - Replaces four separate ad-hoc `ljust` loops (three in `report.py`, plus
+    per-command formatting in `sources` and the seed-check output), which had
+    drifted apart in padding and header style.
+  - Numeric columns (latency, loss, counts, scan IDs) are now right-aligned;
+    verdict columns keep their existing colours.
+  - The main menu, sub-menus, and prompts are styled coherently with the
+    banner instead of the banner being the only coloured element.
+  - `gaming sources` now prints a real table with a description per source
+    (read from each source module's docstring) rather than a bare name list.
+  - `gaming validate-seed` / `refresh-seeds` report stale CIDRs as a table with
+    a styled pass/fail summary.
+
+  All styling routes through the existing `_supports_color` predicate, so
+  piped, redirected, `NO_COLOR`, and non-TTY output stays clean plain ASCII.
+  A regression test asserts the invariant directly: **stripping ANSI from the
+  coloured rendering yields byte-for-byte the plain rendering**, so colour can
+  never disturb column alignment. Nothing added here animates or moves the
+  cursor.
+- **README restructured, and split into true parallel English/Persian
+  versions.** Previously a single mixed-language file that was Persian-primary
+  with stray English paragraphs; now `README.md` (English) and `README.fa.md`
+  (Persian) carry identical structure and content, cross-linked at the top.
+  - Bidirectional reachability, the web dashboard, and scheduled monitoring are
+    described up front with their own sections instead of being single bullets
+    buried in a feature list.
+  - New "What the output actually looks like" section showing a real terminal
+    results table, the live progress bar, and an ASCII mockup of the dashboard
+    with a description of each page.
+  - Consistent heading hierarchy plus a table of contents.
+  - Every one of the 23 example commands was verified against the actual CLI
+    (`--help` for each subcommand); the documented shutdown behaviour of
+    `gaming web` was rewritten to match the fix above.
+  - The "not a game" disclaimer and the responsible-use section are intact and
+    prominent in both languages.
+
+
+
+
 ## [0.7.0] - 2026-07-22
 
 ### Added

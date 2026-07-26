@@ -23,7 +23,7 @@ from collections.abc import Iterable
 from typing import TextIO
 
 from .. import __version__
-from . import actions
+from . import actions, theme
 from .actions.context import ActionContext
 from .filters_shared import format_bare_ips as _format_bare_ips
 from .filters_shared import matches_first_octet as _matches_first_octet
@@ -85,22 +85,41 @@ def _hr(width: int = 52) -> str:
     return "-" * width
 
 
-_MENU = """
-{banner}
-==================================================
-   devprogrmer * IP Health Scanner   (v{version})
-==================================================
-  1) Scan saved ranges (datacenter / CDN / both)
-  2) Discover & save provider ranges
-  3) Manage IP ranges
-  4) View scan history
-  5) Settings
-  6) Update installed version
-  7) Filter CIDRs by first octet
-  8) Discover, save & scan a provider
-  9) Launch web panel
-  0) Exit
-{rule}"""
+# Option rows are built at render time so numbers and labels can be styled
+# separately; the plain-text layout is identical to before when colour is off.
+_MENU_OPTIONS = [
+    ("1", "Scan saved ranges (datacenter / CDN / both)"),
+    ("2", "Discover & save provider ranges"),
+    ("3", "Manage IP ranges"),
+    ("4", "View scan history"),
+    ("5", "Settings"),
+    ("6", "Update installed version"),
+    ("7", "Filter CIDRs by first octet"),
+    ("8", "Discover, save & scan a provider"),
+    ("9", "Launch web panel"),
+    ("0", "Exit"),
+]
+
+
+def render_menu(stream: TextIO | None = None, *, banner: str = "") -> str:
+    """Render the main menu, styled consistently with the rest of the UI.
+
+    Degrades to exactly the previous plain layout when the stream is not an
+    ANSI-capable TTY, so piped/scripted use is unchanged.
+    """
+    stream = stream or sys.stdout
+    bar = "=" * 50
+    title = f"devprogrmer * IP Health Scanner   (v{__version__})"
+    lines = [
+        banner,
+        theme.style(bar, "rule", stream),
+        "   " + theme.style(title, "title", stream),
+        theme.style(bar, "rule", stream),
+    ]
+    for key, label in _MENU_OPTIONS:
+        lines.append(f"  {theme.style(key + ')', 'accent', stream)} {label}")
+    lines.append(theme.style(_hr(), "rule", stream))
+    return "\n".join(lines)
 
 
 class Menu:
@@ -124,7 +143,7 @@ class Menu:
         self.stdout.flush()
 
     def _prompt(self, message: str) -> str:
-        self.stdout.write(message)
+        self.stdout.write(theme.style(message, "prompt", self.stdout))
         self.stdout.flush()
         line = self.stdin.readline()
         if not line:  # EOF (e.g. piped input exhausted) — behave like "exit".
@@ -133,12 +152,12 @@ class Menu:
 
     def _choose(self, title: str, options: list[tuple[str, str]]) -> str | None:
         """Render a titled numbered menu; return the chosen key or None."""
-        self._print(f"\n{title}")
+        self._print("\n" + theme.heading(title, self.stdout))
         for i, (_key, label) in enumerate(options, start=1):
-            self._print(f"  {i}) {label}")
+            self._print(f"  {theme.style(f'{i})', 'accent', self.stdout)} {label}")
         raw = self._prompt("Choice: ").strip()
         if not raw.isdigit() or not (1 <= int(raw) <= len(options)):
-            self._print("Unknown option.")
+            self._print(theme.style("Unknown option.", "warn", self.stdout))
             return None
         return options[int(raw) - 1][0]
 
@@ -172,7 +191,7 @@ class Menu:
         while True:
             banner = render_banner(self.stdout) if first else ""
             first = False
-            self._print(_MENU.format(banner=banner, version=__version__, rule=_hr()))
+            self._print(render_menu(self.stdout, banner=banner))
             try:
                 choice = self._prompt("Select an option: ")
             except EOFError:
@@ -202,12 +221,14 @@ class Menu:
                     self._print("Goodbye.")
                     return 0
                 else:
-                    self._print("Unknown option. Please choose from the menu.")
+                    self._print(theme.style(
+                        "Unknown option. Please choose from the menu.",
+                        "warn", self.stdout))
             except EOFError:
                 self._print("\nGoodbye.")
                 return 0
             except KeyboardInterrupt:
-                self._print("\nCancelled.")
+                self._print("\n" + theme.style("Cancelled.", "warn", self.stdout))
 
 
 def run(argv: list[str] | None = None) -> int:

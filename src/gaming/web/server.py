@@ -25,13 +25,24 @@ from pathlib import Path
 
 from ..interactive import paths
 from ..logging_setup import get_logger
-from . import assets
+from . import assets, lifecycle
 from .auth import CredentialStore
 from .handlers import Request, Response, WebApp
+from .lifecycle import ShutdownCoordinator
 
 log = get_logger("gaming.web.server")
 
 _PORT_RANGE = (20000, 65000)
+
+
+def shutdown_active_server() -> bool:
+    """Stop the dashboard running in this process, if any. True if one was.
+
+    Re-exported from :mod:`gaming.web.lifecycle` so callers only need the
+    server module. Used when ``serve()`` is running on a non-main thread (where
+    signal handlers cannot be installed) — same cleanup, no signal required.
+    """
+    return lifecycle.shutdown_active()
 
 
 def _pick_free_port(bind: str, attempts: int = 50) -> int:
@@ -178,6 +189,7 @@ def serve(
     use_tls: bool = False,
     reset_credentials: bool = False,
     daemon: bool = False,
+    scheduler: object | None = None,
     print_fn=print,
 ) -> int:
     """Start the dashboard and block serving requests. Returns an exit code.
@@ -188,6 +200,11 @@ def serve(
     When ``daemon`` is set, the process detaches from the controlling terminal
     after the credentials/URL banner is printed (so the user still sees the
     one-time password) and writes a PID file for ``--stop`` / ``--status``.
+
+    Shutdown (Ctrl+C, ``SIGTERM`` from ``gaming web --stop``, or a direct call)
+    is handled entirely by :class:`gaming.web.lifecycle.ShutdownCoordinator` —
+    see that module for why a bare ``except KeyboardInterrupt`` was not enough.
+    An optional ``scheduler`` is stopped as part of that same sequence.
     """
     creds_store = CredentialStore()
     if reset_credentials:
@@ -233,38 +250,46 @@ def serve(
         # We are now the detached grandchild; record our PID for --stop/--status.
         daemon_mod.write_pid(os.getpid())
 
-    # ``serve_forever`` must be stopped via ``shutdown()`` called from a
-    # *different* thread than the one running it (stdlib requirement — calling
-    # it from the same thread deadlocks). So it runs on a background thread and
-    # the main thread just waits, letting Ctrl+C interrupt the wait cleanly
-    # instead of landing mid-request-handling.
-    stopped = threading.Event()
-
-    def _run() -> None:
-        try:
-            httpd.serve_forever(poll_interval=0.25)
-        finally:
-            stopped.set()
-
-    server_thread = threading.Thread(
-        target=_run, name="gaming-web-serve", daemon=True
-    )
-    server_thread.start()
-
-    try:
-        while not stopped.is_set():
-            stopped.wait(timeout=0.5)
-    except KeyboardInterrupt:
-        print_fn("\nShutting down dashboard...")
-    finally:
-        httpd.shutdown()
-        server_thread.join(timeout=5)
-        httpd.server_close()
+    def _cleanup() -> None:
         if daemon:
             from . import daemon as daemon_mod
 
             daemon_mod.remove_pid()
-        print_fn("Dashboard stopped.")
+
+    coordinator = ShutdownCoordinator(
+        httpd=httpd,
+        jobs=app.jobs,
+        scheduler=scheduler,
+        print_fn=print_fn,
+        on_cleanup=_cleanup,
+    )
+    # Registered before the serve loop starts so a signal arriving during
+    # startup is still handled by us rather than killing the process outright.
+    coordinator.install_signal_handlers()
+    lifecycle.set_active(coordinator)
+
+    # ``serve_forever`` must be stopped via ``shutdown()`` called from a
+    # *different* thread than the one running it (stdlib requirement — calling
+    # it from the same thread deadlocks). So it runs on a background thread and
+    # the coordinator waits for a stop request on this one.
+    def _run() -> None:
+        try:
+            httpd.serve_forever(poll_interval=0.25)
+        except Exception as exc:  # noqa: BLE001 - a dead loop must still unblock us
+            log.warning("serve loop exited unexpectedly: %s", exc)
+        finally:
+            # However the loop ends -- shutdown() called, an unexpected error,
+            # or a subclass returning on its own -- the waiter must be released,
+            # otherwise serve() would block forever with nothing left serving.
+            coordinator.request_stop()
+
+    server_thread = threading.Thread(
+        target=_run, name="gaming-web-serve", daemon=True
+    )
+    coordinator.server_thread = server_thread
+    server_thread.start()
+
+    coordinator.wait_for_shutdown()
     return 0
 
 

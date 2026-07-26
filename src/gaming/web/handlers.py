@@ -428,6 +428,11 @@ def _scan_sequential_and_store(
         }
 
     for cidr in cidr_list:
+        if job.cancelled():
+            # Shutdown asked us to stop: return what we have rather than being
+            # killed mid-scan. Already-scanned CIDRs are still persisted below.
+            log.info("sequential scan cancelled after %d/%d CIDRs", len(per_cidr), total)
+            break
         try:
             hosts = ranges_mod.expand_hosts(
                 [cidr],

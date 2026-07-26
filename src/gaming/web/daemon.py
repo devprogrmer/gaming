@@ -147,13 +147,19 @@ def status(pid_path: Path | None = None) -> Status:
     return Status(running=True, pid=pid, since=since)
 
 
-def stop(pid_path: Path | None = None, *, timeout: float = 5.0) -> bool:
+def stop(pid_path: Path | None = None, *, timeout: float = 15.0) -> bool:
     """Gracefully stop a daemonized dashboard via its PID file.
 
     Sends ``SIGTERM`` and waits up to ``timeout`` seconds for the process to
     exit, escalating to ``SIGKILL`` if it does not. Returns True if a running
     process was stopped, False if none was found. The PID file is removed on
     success. Fail-soft: a missing/stale PID file is a no-op returning False.
+
+    The ``SIGTERM`` is caught in the target process by
+    :class:`gaming.web.lifecycle.ShutdownCoordinator`, which runs the exact
+    same cleanup sequence as a foreground Ctrl+C — that shared handler is why
+    ``timeout`` here should stay comfortably above the coordinator's job-drain
+    bound, so a clean stop is not cut short by the ``SIGKILL`` escalation.
     """
     path = pid_path or paths.web_pid_path()
     pid = read_pid(path)

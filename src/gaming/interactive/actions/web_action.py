@@ -10,9 +10,12 @@ def launch_web_panel(ctx: ActionContext) -> None:
 
     Reuses :func:`gaming.web.server.serve` directly (no subprocess), so the
     startup banner (credentials, bound URL, ``--bind 127.0.0.1`` warning) and
-    the graceful Ctrl+C shutdown behave identically to the CLI subcommand.
-    ``serve`` blocks until stopped and never re-raises ``KeyboardInterrupt``,
-    so control returns to the menu loop once the panel is stopped.
+    the shutdown sequence are literally the same code as the CLI subcommand —
+    :class:`gaming.web.lifecycle.ShutdownCoordinator` handles Ctrl+C here too,
+    restoring the previous signal handlers afterwards so the menu keeps
+    responding to Ctrl+C normally once the panel stops. ``serve`` blocks until
+    stopped and never re-raises ``KeyboardInterrupt``, so control returns to
+    the menu loop cleanly.
     """
     # Imported lazily so normal menu paths don't pull in the http server stack.
     from ...web.server import serve

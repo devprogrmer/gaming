@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 
 import pytest
 
@@ -362,9 +364,9 @@ def test_serve_ctrl_c_shuts_down_gracefully(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_pick_free_port", lambda bind: 31338)
     monkeypatch.setattr(server, "_detect_server_ip", lambda: "203.0.113.8")
 
-    # Simulate Ctrl+C on serve()'s own wait loop specifically (it always waits
-    # with timeout=0.5), not on unrelated Event.wait calls elsewhere -- e.g.
-    # Thread.start() itself blocks on an internal Event with no timeout.
+    # Simulate Ctrl+C on the coordinator's own wait loop specifically (it always
+    # waits with timeout=0.5), not on unrelated Event.wait calls elsewhere --
+    # e.g. Thread.start() itself blocks on an internal Event with no timeout.
     triggered = {"done": False}
     orig_wait = threading.Event.wait
 
@@ -384,8 +386,387 @@ def test_serve_ctrl_c_shuts_down_gracefully(tmp_path, monkeypatch):
     # that order -- rather than closing the socket out from under the loop.
     assert events == ["shutdown_called", "loop_exited", "closed"]
     out = "\n".join(lines)
-    assert "Shutting down dashboard" in out
-    assert "Dashboard stopped." in out
+    assert "Stopping the web panel" in out
+    assert "Web panel stopped." in out
+
+
+# ---- shutdown lifecycle (Part 1) -----------------------------------------
+# These drive ShutdownCoordinator directly rather than sending a real OS
+# signal: signal delivery is racy and, on Windows, Popen.send_signal(SIGTERM)
+# maps to TerminateProcess, which no handler can intercept. Calling the
+# handler/shutdown entry points directly tests the code that a real signal
+# would reach, deterministically.
+def test_shutdown_releases_socket_for_immediate_rebind(tmp_path, monkeypatch):
+    """The port must be free the instant serve() returns.
+
+    Guards the "address already in use" restart failure: server_close() has to
+    actually run, not be skipped because the process was killed outright.
+    """
+    import socket
+    import threading
+
+    from gaming.web import server
+
+    # Bind an ephemeral port, then hand that same port to serve().
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+
+    monkeypatch.setattr(server, "_detect_server_ip", lambda: "127.0.0.1")
+
+    lines: list[str] = []
+    result = {}
+
+    def _run():
+        result["rc"] = server.serve(
+            bind="127.0.0.1", port=port, print_fn=lines.append
+        )
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+
+    # Wait until the listener is actually accepting.
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                break
+        except OSError:
+            time.sleep(0.05)
+    else:
+        pytest.fail("server never started listening")
+
+    # serve() ran off the main thread, so no signal handler was installed --
+    # exactly the situation the direct shutdown entry point exists for.
+    server.shutdown_active_server()
+    thread.join(timeout=15)
+    assert not thread.is_alive(), "serve() did not return after shutdown"
+    assert result["rc"] == 0
+
+    # The real assertion: rebind the same port immediately, no SO_REUSEADDR.
+    rebound = socket.socket()
+    try:
+        rebound.bind(("127.0.0.1", port))
+    except OSError as exc:
+        pytest.fail(f"socket was not released; rebind failed: {exc}")
+    finally:
+        rebound.close()
+
+    assert "Web panel stopped." in "\n".join(lines)
+
+
+def test_shutdown_during_active_scan_job_cancels_and_joins(tmp_path):
+    """Shutdown mid-scan must stop the job thread, not abandon it.
+
+    This is the specific scenario behind the bug report: job threads are
+    daemonic, so before this fix the interpreter killed them at exit -- from
+    the user's perspective the panel "just died" mid-scan.
+    """
+    import threading
+
+    from gaming.web.jobs import JobManager
+    from gaming.web.lifecycle import ShutdownCoordinator
+
+    jobs = JobManager()
+    steps: list[int] = []
+    started = threading.Event()
+
+    def _scan_like(job):
+        # Mirrors _scan_sequential_and_store: poll cancelled() between units.
+        for i in range(200):
+            started.set()
+            if job.cancelled():
+                return {"partial": i}
+            steps.append(i)
+            time.sleep(0.02)
+        return {"complete": True}
+
+    job = jobs.start("scan-sequential", _scan_like)
+    assert started.wait(timeout=5)
+
+    coordinator = ShutdownCoordinator(jobs=jobs, print_fn=lambda _s: None)
+    coordinator.shutdown()
+
+    # The worker observed the cancel flag and returned on its own.
+    assert job.status == "cancelled"
+    assert job.cancelled()
+    # And its thread is really gone, not merely orphaned.
+    assert not [
+        t for t in threading.enumerate() if t.name.startswith("job-") and t.is_alive()
+    ]
+    # It stopped early rather than running all 200 steps to completion.
+    assert len(steps) < 200
+
+
+def test_shutdown_is_bounded_when_a_job_ignores_cancellation(tmp_path):
+    """A worker that never checks cancelled() must not hang shutdown."""
+    from gaming.web.jobs import JobManager
+    from gaming.web.lifecycle import ShutdownCoordinator
+
+    jobs = JobManager()
+    running = threading.Event()
+
+    def _stubborn(job):
+        running.set()
+        time.sleep(30)  # never polls job.cancelled()
+
+    jobs.start("stubborn", _stubborn)
+    assert running.wait(timeout=5)
+
+    lines: list[str] = []
+    coordinator = ShutdownCoordinator(
+        jobs=jobs, print_fn=lines.append, job_drain_timeout=0.5
+    )
+    start = time.monotonic()
+    coordinator.shutdown()
+    elapsed = time.monotonic() - start
+
+    # Bounded by the drain timeout, not by the job's 30s sleep.
+    assert elapsed < 5, f"shutdown blocked for {elapsed:.1f}s"
+    # And it says so honestly instead of claiming a clean stop.
+    assert "did not stop in time" in "\n".join(lines)
+
+
+def test_shutdown_stops_scheduler_and_removes_pid(tmp_path):
+    """The scheduler thread and PID file are part of the same cleanup path."""
+    from gaming.web.lifecycle import ShutdownCoordinator
+
+    calls: list[str] = []
+
+    class _FakeScheduler:
+        def stop(self):
+            calls.append("scheduler_stopped")
+
+    class _FakeHTTPD:
+        def shutdown(self):
+            calls.append("httpd_shutdown")
+
+        def server_close(self):
+            calls.append("server_closed")
+
+    coordinator = ShutdownCoordinator(
+        httpd=_FakeHTTPD(),
+        scheduler=_FakeScheduler(),
+        print_fn=lambda _s: None,
+        on_cleanup=lambda: calls.append("pid_removed"),
+    )
+    coordinator.shutdown()
+
+    # Order matters: stop listening, stop the scheduler, then release the
+    # socket, and only then drop the PID file.
+    assert calls == [
+        "httpd_shutdown",
+        "scheduler_stopped",
+        "server_closed",
+        "pid_removed",
+    ]
+
+
+def test_shutdown_is_idempotent_and_never_raises(tmp_path):
+    """A second Ctrl+C (or SIGTERM racing SIGINT) must be a no-op."""
+    from gaming.web.lifecycle import ShutdownCoordinator
+
+    calls: list[str] = []
+
+    class _FakeHTTPD:
+        def shutdown(self):
+            calls.append("shutdown")
+
+        def server_close(self):
+            calls.append("close")
+
+    coordinator = ShutdownCoordinator(
+        httpd=_FakeHTTPD(), print_fn=lambda _s: None
+    )
+    coordinator.shutdown()
+    coordinator.shutdown()
+    coordinator.shutdown()
+
+    assert calls == ["shutdown", "close"]
+    assert coordinator.finished.is_set()
+
+
+def test_shutdown_survives_cleanup_errors(tmp_path):
+    """One failing cleanup step must not prevent the rest from running."""
+    from gaming.web.lifecycle import ShutdownCoordinator
+
+    calls: list[str] = []
+
+    class _AngryHTTPD:
+        def shutdown(self):
+            raise RuntimeError("shutdown exploded")
+
+        def server_close(self):
+            calls.append("closed_anyway")
+
+    class _AngryScheduler:
+        def stop(self):
+            raise RuntimeError("scheduler exploded")
+
+    coordinator = ShutdownCoordinator(
+        httpd=_AngryHTTPD(),
+        scheduler=_AngryScheduler(),
+        print_fn=lambda _s: None,
+        on_cleanup=lambda: calls.append("cleanup_ran"),
+    )
+    coordinator.shutdown()  # must not raise
+
+    assert calls == ["closed_anyway", "cleanup_ran"]
+
+
+def test_signal_handler_requests_stop_without_blocking(tmp_path):
+    """The handler itself must return promptly, deferring the real work.
+
+    Doing a multi-second drain inside a signal handler is how a process ends up
+    wedged, so the handler only flips the flag.
+    """
+    import signal as signal_mod
+
+    from gaming.web.lifecycle import ShutdownCoordinator
+
+    class _FakeHTTPD:
+        def __init__(self):
+            self.stopped = threading.Event()
+
+        def shutdown(self):
+            self.stopped.set()
+
+        def server_close(self):
+            pass
+
+    httpd = _FakeHTTPD()
+    coordinator = ShutdownCoordinator(httpd=httpd, print_fn=lambda _s: None)
+
+    start = time.monotonic()
+    coordinator._handle_signal(signal_mod.SIGINT, None)
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 0.5, "signal handler did real work inline"
+    assert coordinator.stopping.is_set()
+    # The listener stop is dispatched to another thread (calling shutdown()
+    # from the serve_forever() thread would deadlock).
+    assert httpd.stopped.wait(timeout=5)
+    # Cleanup has NOT run yet -- that happens on the waiting thread.
+    assert not coordinator.finished.is_set()
+
+
+def test_repeated_signal_escalates_to_immediate_exit(tmp_path):
+    """A second signal means the user is insisting; stop waiting politely."""
+    import signal as signal_mod
+
+    from gaming.web.lifecycle import ShutdownCoordinator
+
+    coordinator = ShutdownCoordinator(print_fn=lambda _s: None)
+    coordinator._handle_signal(signal_mod.SIGINT, None)
+
+    with pytest.raises(SystemExit) as excinfo:
+        coordinator._handle_signal(signal_mod.SIGINT, None)
+    assert excinfo.value.code == 130
+
+
+def test_signal_handlers_are_restored_after_shutdown(tmp_path, monkeypatch):
+    """The menu must keep responding to Ctrl+C after the panel stops.
+
+    serve() runs in-process from the interactive menu, so leaving our handler
+    installed would hijack Ctrl+C for the rest of the menu session.
+    """
+    import signal as signal_mod
+
+    from gaming.web.lifecycle import ShutdownCoordinator
+
+    original = signal_mod.getsignal(signal_mod.SIGINT)
+    coordinator = ShutdownCoordinator(print_fn=lambda _s: None)
+    coordinator.install_signal_handlers()
+
+    # Only meaningful on the main thread, where installation actually happens.
+    if threading.current_thread() is threading.main_thread():
+        assert signal_mod.getsignal(signal_mod.SIGINT) is not original
+        coordinator.restore_signal_handlers()
+        assert signal_mod.getsignal(signal_mod.SIGINT) is original
+
+
+def test_job_manager_drain_reports_still_running_jobs(tmp_path):
+    """drain() returns what it could not stop, so callers can be honest."""
+    from gaming.web.jobs import JobManager
+
+    jobs = JobManager()
+    running = threading.Event()
+
+    def _stubborn(job):
+        running.set()
+        time.sleep(30)
+
+    jobs.start("stubborn", _stubborn)
+    assert running.wait(timeout=5)
+
+    still_running = jobs.drain(timeout=0.3)
+    assert len(still_running) == 1
+    assert still_running[0].kind == "stubborn"
+
+
+def test_job_manager_drain_returns_empty_when_all_stop(tmp_path):
+    from gaming.web.jobs import JobManager
+
+    jobs = JobManager()
+    started = threading.Event()
+
+    def _cooperative(job):
+        started.set()
+        while not job.cancelled():
+            time.sleep(0.01)
+        return "stopped"
+
+    jobs.start("cooperative", _cooperative)
+    assert started.wait(timeout=5)
+
+    assert jobs.drain(timeout=5) == []
+
+
+def test_sequential_scan_stops_early_when_cancelled(env, monkeypatch):
+    """The sequential scan loop honours cancellation between CIDRs.
+
+    Without this, a shutdown during a multi-CIDR scan would keep probing the
+    network until the interpreter killed the thread mid-write.
+    """
+    from gaming.interactive import ranges as ranges_mod
+    from gaming.interactive import scanner
+    from gaming.web import handlers as handlers_mod
+
+    app, _creds, _password = env
+    scanned: list[str] = []
+
+    monkeypatch.setattr(
+        ranges_mod, "expand_hosts", lambda cidrs, **kw: [f"{cidrs[0]}-host"]
+    )
+
+    def _fake_run_scan(scope, settings, hosts=None):
+        scanned.append(hosts[0])
+        return scanner.ScanReport(scope=scope, results=[], combined=[])
+
+    monkeypatch.setattr(scanner, "run_scan", _fake_run_scan)
+
+    class _CancelAfterFirst:
+        """A Job stub that reports cancelled once one CIDR has been scanned."""
+
+        progress = 0.0
+        result = None
+
+        def cancelled(self):
+            return len(scanned) >= 1
+
+    result = handlers_mod._scan_sequential_and_store(
+        app,
+        ["10.0.0.0/24", "10.0.1.0/24", "10.0.2.0/24"],
+        "web",
+        _CancelAfterFirst(),
+    )
+
+    # Stopped after the first CIDR instead of grinding through all three.
+    assert len(scanned) == 1
+    assert result["cidrs_done"] == 1
+    assert result["cidrs_total"] == 3
+
 
 
 # ---- Iran-only location gate (web scan) ----------------------------------

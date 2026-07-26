@@ -4,127 +4,240 @@
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-> **توجه:** «gaming» فقط نامِ پروژه است. این ابزار **یک بازی، موتور بازی یا لانچر نیست**.
-> بلکه یک **ابزار خط‌فرمان برای کشف رِنج‌های IP و بررسی سلامت و دسترس‌پذیری شبکه** است.
+**[🇬🇧 English](README.md) · [🇮🇷 فارسی](README.fa.md)**
+
+> **Note:** "gaming" is only the project's name. This tool is **not a game, game
+> engine, or launcher**. It is a **command-line tool for IP range discovery and
+> network reachability analysis**.
+
+A dependency-free CLI for discovering IP ranges from public network sources,
+measuring how reachable they are **from Iran and from abroad simultaneously**,
+and reporting the result as a console table, JSON, CSV, or a local web
+dashboard.
+
+**Python 3.11+ standard library only — no runtime dependencies, ever.**
 
 ---
 
-## معرفی پروژه
+## Table of contents
 
-`gaming` یک ابزار خط‌فرمان (CLI) است که:
-
-- رِنج‌های IP را از منابع عمومی شبکه کشف می‌کند (RDAP، WHOIS، ASN/BGP، PeeringDB، تخصیص‌های RIR).
-- این رِنج‌ها را فیلتر و نرمال‌سازی می‌کند (اعتبارسنجی، حذف موارد تکراری، ادغام و در صورت نیاز فشرده‌سازی CIDR).
-- دسترس‌پذیری و سلامت آن‌ها را می‌سنجد (تأخیر، درصد بسته‌های گم‌شده، بررسی پورت‌ها).
-- نتیجه را به‌صورت گزارش‌های ساختاریافته در **کنسول، JSON یا CSV** خروجی می‌گیرد.
-
-علاوه بر حالت خط‌فرمانِ کلاسیک، این پروژه یک **حالت تعاملی و منویی (Interactive)** هم دارد
-که مخصوص کاربران عادی طراحی شده است: کافی است برنامه را اجرا کنید و از داخل منو، اسکن
-رِنج‌های داخلی (ایران) یا خارجی را شروع کنید و نتیجه را به‌صورت ساده‌ی **GOOD / MEDIUM / BAD**
-ببینید — بدون نیاز به هیچ دستور پیچیده‌ای.
-
-### ویژگی‌های کلیدی
-
-- **حالت تعاملی و منویی** برای بررسی سلامت IP به‌صورت زنده (`gaming menu`).
-- **داشبورد وب محلی** (`gaming web`) برای جست‌وجو، اسکن، تاریخچه و تنظیمات — تماماً آفلاین و بدون وابستگی.
-- **دسترس‌پذیری دوطرفه (ایران + خارج)**: هر میزبان هم از ایران و هم از خارج بررسی و به‌صورت INTERNATIONAL / IRAN_ONLY / ABROAD_ONLY / UNREACHABLE دسته‌بندی می‌شود.
-- **دو سرویسِ بررسی از خارج**: check-host.net و (اختیاری) RIPE Atlas، با حالتِ ترکیبی `both`؛ «قطعیِ سرویس» از «در دسترس نبودن» جدا نمایش داده می‌شود.
-- **دو گردش‌کارِ آماده**: رِنج‌های **ایران** و رِنج‌های **خارجی** با فهرست‌های CIDR داخلی و قابل‌ویرایش.
-- **کشف IPهای زنده** با یک اسکن سریع، و امکان تبدیل آن به یک اسکنِ کاملِ سلامت.
-- **اندازه‌گیری تأخیر و بسته‌های گم‌شده** به‌صورت چندسکویی (بدون نیاز به `fping`/`tail`/`watch`).
-- **اسکن اختیاریِ پورت‌های رایج** و **اسکن‌های زمان‌بندی‌شده** با هشدارِ تغییر وضعیت (webhook اختیاری).
-- **دسته‌بندی سادهٔ سلامت به سبک Check-Host**: GOOD / MEDIUM / BAD با آستانه‌های قابل‌تنظیم.
-- **ذخیرهٔ دائمی تاریخچه** در یک پایگاه‌دادهٔ محلی SQLite که بین اجراها باقی می‌ماند.
-- **اعتبارسنجی تازگیِ دادهٔ منابع** (`gaming validate-seed`) با نشانهٔ `last_validated`.
-- **بدون وابستگی خارجی**: فقط **کتابخانهٔ استاندارد پایتون ۳٫۱۱+** — هر جا پایتون باشد اجرا می‌شود.
-- **خرابی‌پذیری نرم (fail-soft)**: اگر یک منبع یا یک میزبان جواب ندهد، کل اجرا متوقف نمی‌شود.
+- [Highlights](#highlights)
+- [What the output actually looks like](#what-the-output-actually-looks-like)
+- [Quick install](#quick-install)
+- [Full installation](#full-installation)
+- [Usage](#usage)
+  - [Interactive menu](#interactive-menu)
+  - [Command line](#command-line)
+  - [Web dashboard](#web-dashboard)
+  - [Scheduled scans and alerts](#scheduled-scans-and-alerts)
+  - [Seed data maintenance](#seed-data-maintenance)
+- [How scanning works](#how-scanning-works)
+- [Exporting results](#exporting-results)
+- [Configuration](#configuration)
+- [Requirements](#requirements)
+- [Limitations](#limitations)
+- [Architecture](#architecture)
+- [Testing and development](#testing-and-development)
+- [Responsible use](#responsible-use)
+- [License](#license)
 
 ---
 
-## نصب سریع (Quick Install)
+## Highlights
 
-اگر فقط می‌خواهید ابزار را سریع راه بیندازید و وارد منوی تعاملی شوید:
+### Bidirectional reachability (Iran + abroad)
 
-**لینوکس / مک / Git Bash / WSL**
+The core capability. Every host is probed **twice** — once from the machine
+running the scan (in production, an Iranian server) and once from outside Iran
+via a third-party vantage point. Combining both answers classifies each host
+into one of four verdicts:
+
+| Verdict | Meaning |
+|---|---|
+| `INTERNATIONAL` | Reachable from Iran **and** from abroad — the useful case. |
+| `IRAN_ONLY` | Reachable from inside Iran, but not from abroad. |
+| `ABROAD_ONLY` | Reachable from abroad, but not from inside Iran. |
+| `UNREACHABLE` | Not reachable from either direction. |
+
+Two abroad-check providers are supported behind one interface: **check-host.net**
+(default) and, optionally, **RIPE Atlas**, with a combined `both` mode. A
+provider *outage* is reported distinctly from a host being genuinely
+unreachable, so "check-host.net is down" never masquerades as "this IP is
+blocked".
+
+### Local web dashboard (`gaming web`)
+
+A full dashboard — search, live scanning, history with a trend chart, and
+settings — served from the standard library with **no build step, no CDN, and
+no webfonts**. It works identically on an air-gapped host. Sessions are
+authenticated with generated credentials shown once on first run; optional
+self-signed TLS is available via `--tls`.
+
+### Scheduled monitoring and change alerts
+
+`gaming schedule` re-runs a saved scope on an interval, appending each run to
+history so the dashboard's trend chart keeps filling without manual work. After
+each run it diffs verdicts against the previous scan and can fire an optional
+webhook when a host's verdict changes — turning a one-shot scan into ongoing
+monitoring.
+
+### Everything else
+
+- **Interactive menu** (`gaming menu`) for live IP health checking without
+  learning any flags.
+- **Two ready-made workflows**: Iranian and foreign ranges, each with a
+  bundled, editable CIDR list.
+- **Live-IP discovery** with a fast probe, upgradeable in place to a full health
+  scan.
+- **Cross-platform latency and packet-loss measurement** — no `fping`, `tail`,
+  or `watch` required.
+- **Optional common-port scanning** (TCP connect), fail-soft and independent of
+  the main scan.
+- **Simple Check-Host-style health grading**: GOOD / MEDIUM / BAD with
+  configurable thresholds.
+- **Persistent history** in a local SQLite database that survives between runs.
+- **Seed freshness validation** (`gaming validate-seed`) with a `last_validated`
+  marker.
+- **Fail-soft throughout**: one dead source or unresponsive host never aborts a
+  run.
+
+---
+
+## What the output actually looks like
+
+### Terminal scan results
+
+A completed scan prints an aligned table. On a colour-capable terminal the
+HEALTH and WHITELIST columns are colour-coded (green / yellow / red); piped or
+redirected output degrades to exactly the same layout in plain ASCII:
+
+```
+HOST            HEALTH  AVG(ms)  LOSS  RECV/SENT  ABROAD      WHITELIST      PORTS
+--------------  ------  -------  ----  ---------  ----------  -------------  ------
+185.143.232.14  GOOD       18.4    0%        4/4  OK (5/5)    INTERNATIONAL  80,443
+185.143.232.51  GOOD       42.7    0%        4/4  OK (4/5)    INTERNATIONAL  443
+77.36.164.9     MEDIUM    128.3   12%        3/4  FAIL (0/5)  IRAN_ONLY      -
+2.144.12.88     BAD           -  100%        0/4  FAIL (0/5)  UNREACHABLE    -
+
+Total: 4   GOOD: 2   MEDIUM: 1   BAD: 1
+INTERNATIONAL: 2   IRAN_ONLY: 1   ABROAD_ONLY: 0   UNREACHABLE: 1
+```
+
+The `ABROAD` column shows how many external vantage points answered
+(`OK (4/5)`), or `unavailable` when the abroad provider itself is down —
+distinct from `FAIL`, which means the host really did not answer.
+
+While a scan runs, a live progress bar shows running verdict tallies:
+
+```
+Scanning [########################------] 204/256 ( 79.7%)  G:141 M:38 B:25
+```
+
+### Web dashboard
+
+`gaming web` serves a dark-mode dashboard with a persistent sidebar. The main
+pages:
+
+```
+┌────────────┬──────────────────────────────────────────────────────────┐
+│ gaming     │  Live Scan                            ● connected        │
+│ dashboard  ├──────────────────────────────────────────────────────────┤
+│            │  Live scan                                               │
+│ Overview   │  Probe saved ranges for bidirectional reachability…      │
+│ Search     │  ┌────────────────────────────────────────────────────┐  │
+│ ▸ Live Scan│  │ SCAN SCOPE                                         │  │
+│ History    │  │ [iran_datacenter ▾] ◉ all together ○ one at a time │  │
+│ Settings   │  │ ☐ whitelist only    [ Scan saved ranges ]          │  │
+│            │  └────────────────────────────────────────────────────┘  │
+│            │  INTERNATIONAL: 3  IRAN_ONLY: 1  UNREACHABLE: 1          │
+│            │  ┌────────────────────────────────────────────────────┐  │
+│            │  │ HOST            HEALTH   AVG(ms)  WHITELIST        │  │
+│            │  │ 185.143.232.14  (GOOD)      18.4  (INTERNATIONAL)  │  │
+│            │  │ 77.36.164.9     (MEDIUM)   128.3  (IRAN_ONLY)      │  │
+│            │  └────────────────────────────────────────────────────┘  │
+│ admin-c6b… │                                                          │
+│ Sign out   │                                                          │
+└────────────┴──────────────────────────────────────────────────────────┘
+```
+
+- **Overview** — one card per provider with a meter showing the fraction of its
+  probed ranges currently reachable internationally.
+- **Search** — query the bundled seed data and live discovery sources by CIDR,
+  octet, provider, country, or ASN.
+- **Live Scan** — run a scan over a saved category, either all ranges together
+  or one CIDR at a time (per-CIDR progress and results appear as they arrive).
+  Status values render as coloured pill badges; results download as a
+  whitelist, CSV, or JSON.
+- **History** — every past scan with a trend chart; select a row to inspect and
+  export its per-host results.
+- **Settings** — the same settings file the CLI and menu use, so changes apply
+  everywhere.
+
+Long result tables keep their header row pinned while scrolling, numeric
+columns are right-aligned, and empty/loading/error states are rendered
+explicitly rather than leaving a blank table.
+
+---
+
+## Quick install
+
+**Linux / macOS / Git Bash / WSL**
 
 ```bash
 git clone https://github.com/devprogrmer/gaming.git
 cd gaming
-./install.sh          # برای ساخت لینک ~/.local/bin/gaming گزینهٔ --user را اضافه کنید
-./gaming              # اجرای منوی تعاملی
+./install.sh          # add --user to create a ~/.local/bin/gaming symlink
+./gaming              # launch the interactive menu
 ```
 
-**ویندوز (PowerShell)**
+**Windows (PowerShell)**
 
 ```powershell
 git clone https://github.com/devprogrmer/gaming.git
 cd gaming
-powershell -ExecutionPolicy Bypass -File .\install.ps1
-.\gaming.cmd
-```
-
-اسکریپت نصب به‌صورت خودکار یک **محیط مجازی (virtualenv)** می‌سازد، ابزار را نصب می‌کند و یک
-اجراکنندهٔ `gaming` برایتان درست می‌کند. نیازی به نصب دستیِ هیچ وابستگی‌ای نیست.
-
-> **نکته:** اسکریپت نصب را از داخل پوشهٔ خودِ مخزن (که فقط یک `gaming` قابل‌اجرا می‌سازد)
-> اجرا کنید. اگر در همان پوشه از قبل یک **پوشه** یا فایل به نام `gaming` وجود داشته باشد
-> (مثلاً از یک نصب ناقصِ قبلی یا جایی که `src/gaming/` کنارش استخراج شده)، ساختِ اجراکننده
-> ممکن نیست و خطای `./gaming: Is a directory` می‌گیرید. در این حالت نصب‌کننده اکنون با پیام
-> روشن متوقف می‌شود؛ آن پوشه را حذف کنید یا نصب را از یک پوشهٔ تمیز اجرا کنید. در پایانِ نصب،
-> اسکریپت خودش اجراکننده را با `--version` می‌آزماید تا مطمئن شود سالم است.
-
----
-
-## نصب کامل (گام‌به‌گام)
-
-### پیش‌نیاز
-
-- **پایتون نسخهٔ ۳٫۱۱ یا بالاتر** (به `tomllib` از کتابخانهٔ استاندارد نیاز دارد).
-- بدون هیچ وابستگیِ خارجیِ زمان‌اجرا.
-
-نسخهٔ پایتون خود را بررسی کنید:
-
-```bash
-python --version      # باید 3.11 یا بالاتر باشد
-```
-
-### روش ۱ — نصب با اسکریپت (پیشنهادی برای کاربران عادی)
-
-همان روش «نصب سریع» بالا. اسکریپت `install.sh` یا `install.ps1` همه‌چیز را خودکار انجام می‌دهد.
-
-### روش ۲ — نصب دستی با pip
-
-نصب از روی سورس:
-
-```bash
-git clone https://github.com/devprogrmer/gaming.git
-cd gaming
-python -m pip install .
-```
-
-نصب در حالت توسعه/ویرایش‌پذیر (دستور `gaming` و ابزارهای توسعه را هم اضافه می‌کند):
-
-```bash
-python -m pip install -e ".[dev]"
-```
-
-اجرا بدون نصب:
-
-```bash
-PYTHONPATH=src python -m gaming --help
+.\install.ps1
+.\gaming.bat
 ```
 
 ---
 
-## نحوهٔ اجرا
+## Full installation
 
-### اجرای حالت تعاملی (منویی)
+### Prerequisites
 
-کافی است `gaming` را بدون هیچ آرگومانی اجرا کنید (یا `gaming menu`). منوی زیر باز می‌شود:
+- **Python 3.11 or newer.**
+- `git` (to clone the repository).
+- No third-party packages — the standard library is the only runtime
+  dependency.
+
+### Option 1 — install script (recommended)
+
+```bash
+./install.sh --user   # creates ~/.local/bin/gaming
+```
+
+Ensure `~/.local/bin` is on your `PATH`, then run `gaming` from anywhere.
+
+### Option 2 — pip
+
+```bash
+python -m pip install -e .        # editable install from a clone
+gaming --version
+```
+
+Installing with `pip` puts the `gaming` entry point on your `PATH` directly.
+
+---
+
+## Usage
+
+### Interactive menu
+
+Run `gaming` with no arguments (or `gaming menu`):
 
 ```
 ==================================================
-   devprogrmer * IP Health Scanner   (v0.7.0)
+   devprogrmer * IP Health Scanner   (v0.8.0)
 ==================================================
   1) Scan saved ranges (datacenter / CDN / both)
   2) Discover & save provider ranges
@@ -139,494 +252,344 @@ PYTHONPATH=src python -m gaming --help
 --------------------------------------------------
 ```
 
-معنی گزینه‌های منو:
-
-| گزینه | کار آن |
+| Option | What it does |
 |---|---|
-| **۱) Scan saved ranges** | اسکن سلامت روی رِنج‌های ذخیره‌شده (دیتاسنتر / CDN / هر دو، ایران / خارجی). |
-| **۲) Discover & save provider ranges** | کشف رِنج‌های ارائه‌دهنده‌ها و ذخیرهٔ خودکار در دسته‌های مربوطه. |
-| **۳) Manage IP ranges** | افزودن یا حذف رِنج‌های دلخواه (CIDR) به تفکیک دسته. |
-| **۴) View scan history** | مرور اسکن‌های قبلی که در پایگاه‌دادهٔ محلی ذخیره شده‌اند. |
-| **۵) Settings** | تنظیم آستانه‌ها، پینگ، هم‌زمانی، بررسیِ خارج، ارائه‌دهنده، اسکن پورت و هشدارها. |
-| **۶) Update installed version** | به‌روزرسانی درجای نسخهٔ نصب‌شده. |
-| **۷) Filter CIDRs by first octet** | کشف و فیلترِ پویا بر اساس اولین اکتت + دیتاسنتر. |
-| **۸) Discover, save & scan a provider** | یک ارائه‌دهندهٔ مشخص: کشف ← ذخیره ← اسکن، یک‌جا. |
-| **۹) Launch web panel** | اجرای همان داشبورد وب `gaming web` در همین پردازه (بدون subprocess)؛ گزینهٔ bind/port/tls را می‌پرسد و با Ctrl+C به‌صورت تمیز متوقف شده و به منو برمی‌گردد. |
-| **۰) Exit** | خروج از برنامه. |
+| **1) Scan saved ranges** | Health-scan the saved ranges (datacenter / CDN / both, Iranian or foreign). |
+| **2) Discover & save provider ranges** | Discover provider ranges and save them into the matching categories. |
+| **3) Manage IP ranges** | Add or remove your own CIDRs, per category. |
+| **4) View scan history** | Browse previous scans stored in the local database. |
+| **5) Settings** | Thresholds, ping counts, concurrency, abroad checking, provider, port scanning, alerts. |
+| **6) Update installed version** | Upgrade the installation in place. |
+| **7) Filter CIDRs by first octet** | Discover and filter dynamically by leading octet + datacenter. |
+| **8) Discover, save & scan a provider** | One provider: discover → save → scan, in a single step. |
+| **9) Launch web panel** | Start the same dashboard as `gaming web` in this process. Prompts for bind/port/TLS, and Ctrl+C stops it cleanly and returns to the menu. |
+| **0) Exit** | Quit. |
 
-### اجرای حالت خط‌فرمان (برای کاربران حرفه‌ای)
+### Command line
 
 ```bash
-# فهرست منابع کشف موجود
+# list available discovery sources (plus seed-data freshness)
 gaming sources
 
-# کشف رِنج‌ها به‌صورت آفلاین (دادهٔ نمونهٔ داخلی)، تمرکز روی دیتاسنترهای ایران، خروجی JSON
+# discover offline (bundled sample data), Iranian datacenters, JSON output
 gaming --offline discover --iran-datacenter --format json
 
-# رِنج‌های خارجی، فشرده‌سازی پیشوندها، خروجی CSV
+# foreign ranges, collapse prefixes, CSV output
 gaming --offline discover --foreign-datacenter --collapse --format csv -o foreign.csv
 
-# بررسی دسترس‌پذیری چند پیشوند مشخص (بررسی زنده‌بودن محلی + پروب پورت)
+# check specific prefixes (local liveness + port probe)
 gaming check 1.1.1.1 8.8.8.0/24 --ports 80,443 --format console
 
-# خط‌لولهٔ کامل: کشف ← فیلتر ← نرمال‌سازی ← دسترس‌پذیری ← گزارش
+# full pipeline: discover → filter → normalize → reachability → report
 gaming --offline run --country IR --ports 80,443 --format json -o report.json
 ```
 
-> بررسی‌های سراسری (`--global`) و کشف در حالت غیرآفلاین به اینترنت عمومی وصل می‌شوند.
-> فقط روی زیرساختی از آن‌ها استفاده کنید که مجاز به بررسی آن هستید.
+> Global checks and non-offline discovery reach the public internet. Only use
+> them against infrastructure you are authorised to probe.
 
----
-
-### داشبورد وب (`gaming web`)
-
-یک داشبورد وب محلی برای جست‌وجو، اسکن دوطرفه (ایران + خارج)، تاریخچه و تنظیمات.
-تماماً با کتابخانهٔ استاندارد پایتون ساخته شده (بدون هیچ وابستگی جدید) و کاملاً آفلاین
-کار می‌کند.
-
-A local web dashboard for search, bidirectional (Iran + abroad) scanning,
-history, and settings. Stdlib-only, no new dependencies, works fully offline.
+### Web dashboard
 
 ```bash
-# اجرا روی یک پورت آزاد تصادفی (۲۰۰۰۰–۶۵۰۰۰)؛ نام کاربری و رمز یک‌بار چاپ می‌شوند
+# bind a random free high port (20000–65000); credentials printed once
 gaming web
 
-# محدود به لوکال‌هاست + پورت مشخص (امن‌ترین حالت روی سرور اشتراکی)
+# localhost only, fixed port (safest on a shared server)
 gaming web --bind 127.0.0.1 --port 8080
 
-# سرویس‌دهی روی HTTPS با گواهی self-signed (کش‌شده در پوشهٔ دادهٔ برنامه)
+# HTTPS with a self-signed certificate (cached in the app data directory)
 gaming web --tls
 
-# بازتولید نام کاربری/رمز و باطل‌کردن همهٔ نشست‌ها (مسیر بازیابی)
+# regenerate the username/password and invalidate all sessions
 gaming web --reset-credentials
 ```
 
-**Live Scan: اسکن همه‌باهم یا یکی‌یکی (scan mode):**
+**Stopping it.** Press **Ctrl+C**. The panel stops in an orderly sequence: it
+stops accepting connections, asks any in-flight scan job to finish at a safe
+point (bounded wait), stops the scheduler if running, releases the listening
+socket so an immediate restart on the same port works, and prints
+`Web panel stopped.` Pressing Ctrl+C a second time exits immediately.
 
-صفحهٔ **Live Scan** پیش از شروعِ اسکن یک انتخاب صریح می‌دهد:
-
-- **Scan all together** (پیش‌فرض، رفتار قبلی) — یک Job واحد روی همهٔ CIDRهای منطبق،
-  یک جدولِ نتایجِ ترکیبی.
-- **Scan one at a time** — هر CIDR منطبق به‌عنوان یک گامِ مستقلِ همان Job واحد،
-  به‌ترتیب و پشت‌سرهم اسکن می‌شود (اسکنِ CIDR بعدی فقط پس از پایانِ قبلی شروع می‌شود).
-  پیشرفت و نتایجِ هر CIDR جداگانه و به‌محضِ آماده‌شدن (از طریق همان مکانیزمِ polling
-  موجود) نمایش داده می‌شود، نه فقط در پایانِ کار. اگر اسکنِ یک CIDR با خطا مواجه شود،
-  فقط همان CIDR به‌عنوان ناموفق علامت می‌خورد و بقیهٔ صف متوقف نمی‌شود (fail-soft).
-  در هر دو حالت، همهٔ CIDRهای اسکن‌شده در یک اسکنِ واحد ذخیره می‌شوند، بنابراین دکمه‌های
-  «Download whitelist IPs» و دانلود CSV/JSON در هر دو حالت یکسان کار می‌کنند.
-
-The Live Scan page now offers an explicit choice before starting: **"Scan all
-together"** (default, unchanged — one job, one combined table) or **"Scan one
-at a time"** (each matched CIDR runs as its own sequential step of the same
-job; per-CIDR progress/results appear as soon as each one finishes via the
-existing polling mechanism, and a failure in one CIDR never aborts the rest of
-the queue). Either way, all scanned CIDRs are persisted as a single scan, so
-the download/export buttons behave identically in both modes.
-
-**تست تقریبیِ مسیر به یک مقصدِ دلخواه (Proximity ping / RIPE Atlas):**
-
-اندازه‌گیریِ «پینگِ خودِ یک IP کشف‌شده به یک مقصد ثالث» از بیرون **ممکن نیست** — فقط
-مالکِ آن IP می‌تواند آن را وادار به ارسال ترافیک کند؛ این یک محدودیت این ابزار نیست،
-بلکه یک واقعیتِ بنیادیِ شبکه است. نزدیک‌ترین تقریبِ صادقانه: از **RIPE Atlas** (یک
-پلتفرمِ عمومیِ اندازه‌گیریِ اینترنت) خواسته می‌شود نزدیک‌ترین پروبِ خود به شبکهٔ آن IP
-(بر اساس تطبیقِ ASN) را پیدا کند و از همان پروب یک پینگِ یک‌بارهٔ به مقصدِ دلخواه بزند.
-
-روی هر ردیفِ نتیجهٔ اسکن، یک دکمهٔ **«Test path to…»** جداگانه و اختیاری وجود دارد
-(کاملاً مجزا از ستون‌های دسترس‌پذیریِ دوطرفهٔ ایران/خارج، چون مفهومِ متفاوتی را می‌سنجد).
-این قابلیت به همان `GAMING_RIPE_ATLAS_KEY` نیاز دارد؛ بدون کلید، پیامِ روشنِ «پیکربندی
-نشده» نمایش داده می‌شود. هر نتیجه — همیشه — با این هشدار همراه است:
-
-> «تقریبی — از نزدیک‌ترین پروبِ در دسترسِ RIPE Atlas به شبکهٔ این IP اندازه‌گیری شده،
-> نه از خودِ IP.»
-
-اگر هیچ پروبی نزدیکِ شبکهٔ آن IP نباشد، پیامِ روشنِ «no nearby probe available» نشان
-داده می‌شود — هرگز به‌جای آن از یک پروبِ نامرتبط استفاده نمی‌شود.
-
-Measuring a discovered IP's *own* ping to a third-party destination is not
-possible from the outside — only that IP's operator can make it originate
-traffic; this is a fact about networking, not a limitation of this tool. As
-the closest honest approximation, an opt-in **"Test path to…"** button on each
-scan row (kept explicitly separate from the Iran/abroad reachability columns)
-asks the nearest RIPE Atlas probe to that IP's network (by ASN match) to ping
-a destination you choose. Gated behind `GAMING_RIPE_ATLAS_KEY`; every result
-always carries the disclaimer "Approximate — measured from the nearest
-available RIPE Atlas probe to this IP's network, not from the IP itself," and
-a network with no nearby probe is reported as such, never silently swapped for
-an unrelated one.
-
-**نکات امنیتی (Security notes):**
-
-- در نخستین اجرا یک **نام کاربری و رمز تصادفی** ساخته و **فقط یک‌بار** چاپ می‌شود؛
-  رمز به‌صورت هش‌شده (`pbkdf2_hmac` + salt) ذخیره می‌شود و دیگر قابل بازیابی نیست.
-  آن را همان لحظه ذخیره کنید. On first run a random username/password is generated
-  and printed **once**; the password is stored only as a salted hash.
-- پیش‌فرض `--bind 0.0.0.0` داشبورد را روی همهٔ رابط‌های شبکه در دسترس می‌گذارد. روی
-  شبکهٔ نامطمئن یا از `--tls` استفاده کنید یا با `--bind 127.0.0.1` محدود کنید و از
-  طریق تونل SSH وصل شوید. `0.0.0.0` over plain HTTP is warned about at startup.
-- ورود ناموفق به‌ازای هر IP نرخ‌محدود می‌شود تا حملهٔ brute-force کند شود. برای
-  اسکریپت/اتوماسیون می‌توانید از توکن Bearer (`Authorization: Bearer …`) استفاده کنید.
-- تغییر رمز از داخل داشبورد، رمز فعلی را می‌خواهد و همهٔ نشست‌های باز را باطل می‌کند.
-
-**اجرای دائمی بدون نیاز به باز ماندن SSH (Keep it running after you disconnect):**
-
-به‌طور پیش‌فرض `gaming web` تا وقتی زنده می‌ماند که ترمینال/نشست SSH بازکنندهٔ آن باز
-بماند؛ با بستن SSH فرایند هم بسته می‌شود. برای اینکه داشبورد مستقل از ترمینال روی سرور
-بماند دو راه دارید:
-
-By default `gaming web` only stays up while the terminal/SSH session that
-launched it stays open. To keep the dashboard running after you disconnect,
-use either the built-in `--daemon` flag (quick) or a systemd service (robust).
+**Running it in the background.** By default the dashboard only lives as long as
+the terminal or SSH session that started it:
 
 ```bash
-# روش سریع: اجرای پس‌زمینه و جدا از ترمینال. نام کاربری/رمز پیش از رفتن به پس‌زمینه
-# چاپ می‌شوند؛ خروجی در web.log و شناسهٔ فرایند در web.pid (پوشهٔ دادهٔ برنامه) ذخیره می‌شود.
+# detach from the terminal; credentials are printed before it backgrounds.
+# Output goes to web.log and the PID to web.pid in the app data directory.
 gaming web --daemon --bind 127.0.0.1 --port 8787
 
-# وضعیت اجرا را ببینید (آیا در حال اجراست و از چه زمانی)
+# is it running, and since when?
 gaming web --status
 
-# توقف تمیز فرایند پس‌زمینه (SIGTERM، و در صورت لزوم SIGKILL)
+# stop it cleanly (SIGTERM, escalating to SIGKILL only if it refuses)
 gaming web --stop
 ```
 
-`--daemon` فقط بقای فرایند پس از قطع اتصال را تغییر می‌دهد؛ رفتار پیش‌فرض `--bind`
-و احراز هویت دست‌نخورده می‌ماند. روی ویندوز (بدون `os.fork`) این گزینه با پیام روشن
-خطا می‌دهد و شما را به سرویس‌منیجر ارجاع می‌دهد. `--daemon` changes only whether the
-process survives disconnection — not the bind/auth behavior.
+`--stop` routes through the exact same shutdown sequence as Ctrl+C, so a
+backgrounded panel drains its jobs just as carefully as a foreground one.
 
-برای راه‌اندازی پایدارتر (بقا پس از ری‌بوت و ری‌استارت خودکار در صورت کرش) از فایل نمونهٔ
-systemd به نشانی `packaging/gaming-web.service` استفاده کنید (به‌صورت خودکار نصب نمی‌شود).
-For a more permanent/production setup, use the shipped systemd unit template
-`packaging/gaming-web.service` (not auto-installed):
+For a permanent installation, use a service manager — a ready-made unit file is
+in `packaging/gaming-web.service`.
 
-```ini
-# /etc/systemd/system/gaming-web.service  (خلاصه — فایل کامل در packaging/)
-[Service]
-User=gaming
-ExecStart=/opt/gaming/.venv/bin/gaming web --bind 127.0.0.1 --port 8787
-Restart=on-failure
-Environment=GAMING_HOME=/var/lib/gaming
-```
+### Scheduled scans and alerts
 
 ```bash
-sudo cp packaging/gaming-web.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now gaming-web
-# اعتبارنامهٔ نخستین اجرا در ژورنال چاپ می‌شود:
-sudo journalctl -u gaming-web --no-pager | grep -A6 'web dashboard'
-```
-
----
-
-### اسکن زمان‌بندی‌شده و هشدار تغییر وضعیت (`gaming schedule`)
-
-برای پایش پیوسته، می‌توانید یک اسکن ذخیره‌شده را روی یک بازهٔ زمانی به‌صورت
-خودکار تکرار کنید. هر اجرا در تاریخچه ذخیره می‌شود و نمودار روند داشبورد را
-بدون اجرای دستی پر می‌کند.
-
-```bash
-# هر ۱۵ دقیقه رِنج‌های ایران را دوباره اسکن کن (تا وقتی Ctrl-C بزنید)
+# re-scan the Iranian ranges every 15 minutes until interrupted
 gaming schedule iran --interval 900
 
-# دقیقاً ۳ بار اسکن کن و خارج شو (برای cron/CI)
+# run exactly 3 scans and exit (useful for cron/CI)
 gaming schedule foreign --interval 300 --count 3
 ```
 
-اگر در **Settings** گزینهٔ `alert_on_change` را روشن کنید، هر بار که یک میزبان
-بین وضعیت «سفیدلیست» (`INTERNATIONAL`) و وضعیت‌های تنزل‌یافته
-(`IRAN_ONLY`/`ABROAD_ONLY`/`UNREACHABLE`) جابه‌جا شود، در لاگ گزارش می‌شود؛
-و اگر `alert_webhook_url` را هم تنظیم کنید، یک payload از نوع JSON با
-`urllib` به آن آدرس POST می‌شود. هر دو پیش‌فرض **خاموش**‌اند.
+Each run is appended to scan history and diffed against the previous run;
+verdict changes can trigger an optional webhook configured in **Settings**.
 
-A scheduled scan re-runs a saved scope on an interval and appends each run to
-history. With `alert_on_change` on (opt-in), a host flipping between the
-`INTERNATIONAL` whitelist and a degraded verdict is logged, and an optional
-`alert_webhook_url` receives a JSON POST (stdlib `urllib`).
-
-### به‌روزرسانی دادهٔ منابع (`gaming refresh-seeds`)
-
-فهرست منابعِ داخلی (`providers.toml`) را در برابر پیشوندهای فعلاً اعلام‌شدهٔ BGP
-بازبینی می‌کند و رِنج‌هایی را که دیگر اعلام نمی‌شوند **علامت‌گذاری** می‌کند
-(هیچ‌چیز حذف نمی‌شود). فقط-خواندنی و کاملاً fail-soft است.
+### Seed data maintenance
 
 ```bash
-gaming refresh-seeds            # بازبینی همهٔ منابع بستهٔ داخلی
+gaming refresh-seeds              # re-check every bundled provider (read-only)
 gaming refresh-seeds --timeout 20
+
+gaming validate-seed              # validate + stamp the last_validated marker
+gaming validate-seed --no-marker  # report only, leave the marker untouched
+
+gaming sources                    # sources + "seed data last validated: …"
 ```
 
-### اعتبارسنجی و نشانهٔ تازگی دادهٔ منابع (`gaming validate-seed`)
-
-مثل `refresh-seeds` رِنج‌های داخلی را در برابر پیشوندهای اعلام‌شده بررسی می‌کند،
-اما علاوه بر گزارش، تاریخ امروز را در یک فیلد جدید `[meta].last_validated` داخل
-`providers.toml` **ثبت** می‌کند تا مشخص باشد دادهٔ داخلی چقدر تازه است. این دستور
-هیچ‌گاه رکورد یک ارائه‌دهنده را اضافه، ویرایش یا حذف نمی‌کند؛ فقط همان یک خطِ نشانه
-را بازنویسی می‌کند و بلوک‌های `[[provider]]` دست‌نخورده می‌مانند. نشانه فقط وقتی ثبت
-می‌شود که دست‌کم یک ارائه‌دهنده واقعاً از شبکه پاسخ گرفته باشد (یک اجرای کاملاً
-آفلاین ادعای تازگی نمی‌کند). دستور `gaming sources` نشان می‌دهد آخرین اعتبارسنجی
-کِی بوده است.
-
-```bash
-gaming validate-seed              # اعتبارسنجی + ثبت تاریخ در نشانه
-gaming validate-seed --no-marker  # فقط گزارش، بدون تغییر نشانه
-gaming sources                    # فهرست منابع + «seed data last validated: …»
-```
-
-`validate-seed` re-checks the bundled seed CIDRs against announced BGP prefixes
-(like `refresh-seeds`) and additionally stamps today's date into a new
-`[meta].last_validated` field in `providers.toml`, so you can see how fresh the
-bundled data is. It **only reports** stale CIDRs and updates that one marker line
-— it never adds, edits, or deletes a provider entry. The marker is stamped only
-when at least one provider was actually reachable. `gaming sources` prints the
-marker.
-
-### انتخاب سرویسِ بررسی «از خارج» و RIPE Atlas (`abroad_provider`)
-
-بررسی «آیا این IP از خارج از ایران در دسترس است؟» دیگر به یک سرویسِ شخص ثالثِ
-تک‌نقطه‌ای وابسته نیست. این بررسی پشتِ یک واسط قرار گرفته و دو پیاده‌سازی دارد:
-
-- **check-host.net** (پیش‌فرض) — همان منطق قبلی، بدون تغییر.
-- **RIPE Atlas** — یک سکوی اندازه‌گیریِ رسمی و پایدارتر. کاملاً **اختیاری** است و به
-  یک کلید API نیاز دارد که از متغیر محیطیِ `GAMING_RIPE_ATLAS_KEY` خوانده می‌شود
-  (هرگز داخل کد ذخیره نمی‌شود). اگر کلیدی تنظیم نشده باشد، این ارائه‌دهنده نادیده
-  گرفته می‌شود و ابزار بدونِ هیچ تغییری فقط از check-host.net استفاده می‌کند.
-
-از منوی **Settings** (یا کلید `global_check.provider` در فایل پیکربندی) می‌توانید
-یکی از `check-host`، `ripe-atlas` یا `both` را انتخاب کنید. در حالت `both` شمارشِ
-گره‌های موفق/کل از هر دو سرویس **پیش از** اعمالِ آستانه با هم جمع می‌شوند، بنابراین
-قطعی یا محدودیت‌نرخِ یک سرویس به‌تنهایی نتیجه را تعیین نمی‌کند.
-
-همچنین اکنون «قطع بودن سرویس» از «در دسترس نبودن مقصد» **جدا** نمایش داده می‌شود:
-ستون ABROAD می‌تواند `unavailable` (سرویس بررسی از کار افتاده)، `not checked`
-(بررسی نشده/غیرعمومی) یا `OK/FAIL (n/total)` (پاسخِ واقعی) باشد — پس می‌فهمید
-«check-host.net الان قطع است» با «این IP از خارج در دسترس نیست» فرق دارد.
-
-```bash
-# استفاده از هر دو سرویس با کلید RIPE Atlas
-export GAMING_RIPE_ATLAS_KEY="<your-atlas-key>"
-# سپس از منوی Settings مقدار abroad_provider را روی both بگذارید
-```
-
-The abroad ("reachable from outside Iran?") check now sits behind a provider
-interface with two implementations: **check-host.net** (default, unchanged) and
-an optional **RIPE Atlas** provider (a more authoritative platform). RIPE Atlas
-needs an API key from the `GAMING_RIPE_ATLAS_KEY` environment variable (never
-hardcoded); with no key it is skipped and the tool falls back to check-host.net
-with no behaviour change. Choose `check-host`, `ripe-atlas`, or `both` via
-Settings (`abroad_provider`) or the `global_check.provider` config key. With
-`both`, node-ok/node-total counts are summed across providers **before** the
-threshold, so one service's outage doesn't decide the verdict. A provider outage
-now shows as a distinct `unavailable` state, separate from `not checked` and from
-a real `FAIL`.
-
-### اسکن پورت‌های رایج (اختیاری)
-
-از منوی **Settings** (یا فرم Settings در داشبورد) می‌توانید `scan_ports` را روشن
-و فهرست `ports` را تنظیم کنید تا هر میزبانِ زنده علاوه بر تأخیر، یک پروبِ سادهٔ
-TCP-connect روی پورت‌های رایج (پیش‌فرض `80,443,22,...`) هم بگیرد؛ پورت‌های باز در
-همان جدول نتایج (کنسول و وب) نشان داده می‌شوند. این پروب مستقل و fail-soft است و
-هرگز اسکن اصلی را کند یا متوقف نمی‌کند.
+Both commands are strictly read-only with respect to provider entries: they
+flag CIDRs that no longer appear in any announced prefix, but never add, edit,
+or delete a provider.
 
 ---
 
-## اسکن چطور کار می‌کند؟
+## How scanning works
 
-روند کار در حالت تعاملی به این صورت است:
+1. **Choose a scope** — Iranian or foreign ranges. Each has a bundled, editable
+   CIDR list (extend it from *Manage IP ranges*).
+2. **Sample hosts** — rather than probing every address in a large range, a
+   configurable number of hosts is sampled per range to keep scans fast.
+3. **Discover live IPs (optional)** — a fast single-pass probe finds responsive
+   hosts, which you can promote in place to a full health scan.
+4. **Measure health** — latency and packet loss are measured cross-platform
+   (ICMP ping, falling back to TCP where unavailable), with a live progress bar
+   showing running GOOD/MEDIUM/BAD tallies.
+5. **Grade the result** — each host is labelled from its latency and loss:
 
-1. **انتخاب دامنه (scope):** رِنج‌های ایران یا خارجی. هر دامنه یک فهرست CIDRِ داخلی و
-   قابل‌ویرایش دارد (از منوی «Manage IP ranges» می‌توانید رِنج دلخواه اضافه/حذف کنید).
-2. **نمونه‌برداری از میزبان‌ها:** برای اینکه اسکن روی رِنج‌های بزرگ سریع بماند، به‌جای
-   آزمودنِ تک‌تکِ آدرس‌ها، از هر رِنج تعدادی نمونه انتخاب می‌شود (این مقدار در «Settings» قابل‌تنظیم است).
-3. **کشف IPهای زنده (اختیاری):** یک پروبِ سریعِ تک‌مرحله‌ای، میزبان‌های پاسخگو را پیدا می‌کند.
-   می‌توانید همان‌جا این فهرست را به یک **اسکن کاملِ سلامت** ارتقا دهید.
-4. **اندازه‌گیری سلامت:** برای هر میزبان، **تأخیر (latency)** و **درصد بسته‌های گم‌شده
-   (packet loss)** به‌صورت چندسکویی اندازه‌گیری می‌شود (پینگ ICMP و در صورت لزوم fallback به TCP).
-   یک **نوار پیشرفتِ زنده** با شمارشِ لحظه‌ایِ GOOD/MEDIUM/BAD نمایش داده می‌شود.
-5. **دسته‌بندی نتیجه:** بر اساس تأخیر و درصد اتلاف، هر میزبان یکی از این سه برچسب را می‌گیرد:
+   | Label | Meaning |
+   |---|---|
+   | **GOOD** | Reachable, low latency, low packet loss. |
+   | **MEDIUM** | Reachable, but higher latency or moderate loss. |
+   | **BAD** | Unreachable, or high packet loss. |
 
-  | برچسب | معنی |
-  |---|---|
-  | **GOOD** | قابل‌دسترس، تأخیر کم، اتلاف بستهٔ کم. |
-  | **MEDIUM** | قابل‌دسترس، اما تأخیر بالاتر یا اتلاف متوسط. |
-  | **BAD** | غیرقابل‌دسترس یا اتلاف بستهٔ بالا. |
+6. **Check reachability from abroad** — the same hosts are probed from outside
+   Iran, producing the combined verdict described in
+   [Highlights](#bidirectional-reachability-iran--abroad).
+7. **Store history** — every scan is written to a local SQLite database and
+   stays browsable between runs.
 
-6. **ذخیرهٔ تاریخچه:** نتیجهٔ هر اسکن در یک پایگاه‌دادهٔ محلی SQLite ذخیره می‌شود و از
-   «View scan history» بین اجراهای مختلف قابل‌مرور است.
+Latency/loss thresholds, probes per host, concurrency, timeouts, and sample
+size are all configurable from the **Settings** menu.
 
-آستانه‌های تأخیر/اتلاف، تعداد پروب به‌ازای هر میزبان، میزان هم‌زمانی، زمان‌انتظار و
-اندازهٔ نمونه‌برداری همگی از منوی **Settings** قابل‌تنظیم‌اند.
+### Where data is stored
 
-### محل ذخیرهٔ داده‌ها
+State lives in your user data directory (override with `GAMING_HOME`):
 
-وضعیت برنامه در پوشهٔ دادهٔ کاربر نگهداری می‌شود (با متغیر محیطی `GAMING_HOME` قابل تغییر است):
-
-| سیستم‌عامل | مسیر |
+| OS | Path |
 |---|---|
-| ویندوز | `%LOCALAPPDATA%\gaming\` |
-| لینوکس/مک | `$XDG_DATA_HOME/gaming/` یا `~/.local/share/gaming/` |
+| Windows | `%LOCALAPPDATA%\gaming\` |
+| Linux/macOS | `$XDG_DATA_HOME/gaming/` or `~/.local/share/gaming/` |
 
-این پوشه شامل این فایل‌هاست: `history.db` (تاریخچهٔ اسکن)، `settings.json` (تنظیمات و آستانه‌ها)
-و `custom_ranges.txt` (رِنج‌های دلخواهی که خودتان اضافه کرده‌اید).
+It holds `history.db` (scan history), `settings.json` (settings and
+thresholds), and `custom_ranges.txt` (CIDRs you added yourself).
 
 ---
 
-## گرفتن خروجی از نتایج
+## Exporting results
 
-**حالت تعاملی:** نتیجهٔ هر اسکن به‌صورت خودکار در پایگاه‌دادهٔ محلی SQLite ذخیره می‌شود و
-هر زمان از منوی **View scan history** قابل‌مرور است — نیازی به کار اضافه نیست.
+**Interactive mode:** every scan is saved to the local SQLite database
+automatically and is browsable from **View scan history** — nothing extra to do.
 
-**حالت خط‌فرمان:** برای گرفتن خروجی در قالب‌های ساختاریافته، از فلگ `--format` و برای نوشتن
-در فایل از `--output` (یا `-o`) استفاده کنید:
+**Command line:** use `--format` for the shape and `--output` (`-o`) to write to
+a file:
 
 ```bash
-# خروجی JSON در فایل
+# JSON to a file
 gaming --offline run --country IR --format json -o report.json
 
-# خروجی CSV در فایل
+# CSV to a file
 gaming --offline discover --foreign-datacenter --format csv -o foreign.csv
 
-# خروجی خوانا در کنسول
+# human-readable console output
 gaming check 1.1.1.1 --ports 80,443 --format console
 ```
 
-هر ردیفِ نتیجه (در کنسول/JSON/CSV) شامل این فیلدهاست:
+Each result row (console/JSON/CSV) contains:
 
-| فیلد | معنی |
+| Field | Meaning |
 |---|---|
-| `source` | منبع/منابعی که این رکورد را تولید کرده‌اند (مثلاً `rdap+whois`). |
-| `asn` | شمارهٔ سیستم خودمختار به شکل `AS<n>`. |
-| `organization` | سازمان مالک (در صورت مشخص‌بودن). |
-| `country` | کد کشور (ISO). |
-| `provider` | نشانهٔ ارائه‌دهنده (حروف کوچک، قابل‌جستجوی بخشی). |
-| `prefix` | CIDRِ نرمال‌شده. |
-| `alive` | دسترس‌پذیری محلی (`true` / `false` / `null`). |
-| `global_reachable` | دسترس‌پذیری سراسری از طریق check-host.net (`true` / `false` / `null`). |
-| `open_ports` | پورت‌هایی که هنگام پروب باز بوده‌اند. |
-| `notes` | یادداشت‌های منشأ/تشخیصی. |
+| `source` | Source(s) that produced the record (e.g. `rdap+whois`). |
+| `asn` | Autonomous system number as `AS<n>`. |
+| `organization` | Owning organisation, when known. |
+| `country` | ISO country code. |
+| `provider` | Provider tag (lowercase, partially searchable). |
+| `prefix` | Normalised CIDR. |
+| `alive` | Local reachability (`true` / `false` / `null`). |
+| `global_reachable` | Global reachability via check-host.net (`true` / `false` / `null`). |
+| `open_ports` | Ports found open during probing. |
+| `notes` | Provenance/diagnostic notes. |
 
 ---
 
-## پیکربندی (اختیاری)
+## Configuration
 
-پیکربندی لایه‌لایه است: **پیش‌فرض‌های داخلی ← فایل TOML ← بازنویسی از طریق خط‌فرمان**.
-یک قالبِ کامل و توضیح‌دار در [`gaming.example.toml`](gaming.example.toml) هست:
+Configuration is layered: **built-in defaults ← TOML file ← command-line
+overrides**. A fully commented template lives in
+[`gaming.example.toml`](gaming.example.toml):
 
 ```bash
 gaming --config gaming.example.toml run --format json
 ```
 
-بخش‌ها: `[general]`، `[discovery]`، `[filters]`، `[reachability]`، `[global_check]`.
+Sections: `[general]`, `[discovery]`, `[filters]`, `[reachability]`,
+`[global_check]`.
 
-گزینه‌های سراسری (پیش از نام زیر‌دستور):
+Global options (before the subcommand name):
 
-| گزینه | توضیح |
+| Option | Description |
 |---|---|
-| `--config, -c PATH` | مسیر فایل پیکربندی TOML. |
+| `--config, -c PATH` | Path to a TOML configuration file. |
 | `--log-level LEVEL` | `DEBUG` \| `INFO` \| `WARNING` \| `ERROR`. |
-| `--concurrency N` | حداکثر تعداد کارگرِ هم‌زمان. |
-| `--timeout SECONDS` | زمان‌انتظار برای هر عملیات. |
-| `--offline` | استفاده از دادهٔ نمونهٔ داخلی به‌جای فراخوانی زندهٔ شبکه. |
-| `--quiet, -q` | فقط خطاها را لاگ کن. |
-| `--version` | چاپ نسخه. |
+| `--concurrency N` | Maximum concurrent workers. |
+| `--timeout SECONDS` | Per-operation timeout. |
+| `--offline` | Use bundled sample data instead of live network calls. |
+| `--quiet, -q` | Only log errors. |
+| `--version` | Print the version. |
+
+### Choosing the abroad-check provider
+
+The abroad check sits behind an `AbroadProvider` interface with two
+implementations: **check-host.net** (default) and **RIPE Atlas** (optional,
+requires an API key). Set `abroad_provider` to `check_host`, `ripe_atlas`, or
+`both` from the **Settings** menu. With no key configured, RIPE Atlas is
+skipped and the tool falls back to check-host.net.
 
 ---
 
-## پیش‌نیازها
+## Requirements
 
-- **پایتون ۳٫۱۱ یا بالاتر**.
-- بدون وابستگیِ خارجیِ زمان‌اجرا (فقط کتابخانهٔ استاندارد).
-- برای پینگِ ICMP، دسترسی به دستور `ping` سیستم‌عامل لازم است؛ در صورت نبودِ آن،
-  به‌صورت خودکار به بررسی TCP سوییچ می‌شود.
-- برای بررسی‌های سراسری (`--global`) و کشف زنده، دسترسی به اینترنت لازم است.
-
----
-
-## محدودیت‌ها
-
-- این ابزار **رِنج‌های کاملِ IP را به‌طور جامع پویش نمی‌کند**؛ برای حفظ سرعت روی رِنج‌های
-  بزرگ، از هر رِنج فقط **نمونه‌برداری** می‌کند (اندازهٔ نمونه در «Settings» قابل‌تنظیم است).
-- دقتِ پینگِ ICMP و درصد اتلاف بسته به شبکه، فایروال و سیستم‌عامل شما بستگی دارد؛ برخی
-  میزبان‌ها ممکن است ICMP را مسدود کنند و در نتیجه به‌اشتباه **BAD** دیده شوند.
-- کشفِ زندهٔ منابع (RDAP/WHOIS/BGP/PeeringDB) به سرویس‌های عمومیِ شخص ثالث وابسته است؛
-  در صورت شکست یا با فلگ `--offline`، ابزار به **دادهٔ نمونهٔ داخلی** برمی‌گردد و خروجی
-  ممکن است کامل یا به‌روز نباشد.
-- بررسی سراسری، آدرس‌های هدف را به یک سرویس شخص ثالث (check-host.net) ارسال می‌کند و
-  فقط روی IPهای عمومی کار می‌کند.
-- این ابزار برای **شناساییِ شبکه و تست دسترس‌پذیری** است. فقط روی شبکه‌ها و میزبان‌هایی
-  از آن استفاده کنید که مالک آن‌ها هستید یا صراحتاً مجاز به بررسی آن‌ها شده‌اید.
+- **Python 3.11 or newer.**
+- No third-party runtime dependencies (standard library only).
+- ICMP ping requires the OS `ping` command; without it, the tool switches to
+  TCP checks automatically.
+- Global checks and live discovery require internet access.
 
 ---
 
-## معماری پروژه
+## Limitations
+
+- This tool **does not exhaustively scan entire IP ranges** — it **samples**
+  each range to stay fast (sample size is configurable in *Settings*).
+- ICMP ping accuracy and packet-loss figures depend on your network, firewall,
+  and OS; hosts that block ICMP may be reported as **BAD** incorrectly.
+- Live discovery (RDAP/WHOIS/BGP/PeeringDB) depends on public third-party
+  services. On failure — or with `--offline` — the tool falls back to bundled
+  sample data, which may be incomplete or out of date.
+- Global checks send target addresses to a third-party service
+  (check-host.net) and only work for public IPs.
+- The "test path to…" proximity ping is an **approximation**: it measures from
+  the nearest available RIPE Atlas probe in the source IP's network, *not* from
+  the source IP itself. A remote tool cannot make an arbitrary IP originate
+  traffic — that is a fact about networking, not a limitation of this tool.
+- This is a **network reconnaissance and reachability testing** tool. Only use
+  it on networks and hosts you own or are explicitly authorised to probe.
+
+---
+
+## Architecture
 
 ```
 src/gaming/
-├── cli.py               # زیر‌دستورهای argparse (menu/sources/discover/check/run/web/schedule/…)
-├── pipeline.py          # هماهنگی: کشف ← پردازش ← دسترس‌پذیری
-├── config.py            # بارگذاری TOML + بازنویسی لایه‌ای (tomllib)
-├── models.py            # IPRecord، Filters، توابع نرمال‌سازی
-├── logging_setup.py     # پیکربندی لاگ
-├── discovery/           # منابع افزونه‌ای (واسط مشترک Source)
-│   ├── base.py          #   Source ABC + DiscoveryContext + fallback آفلاین
+├── cli.py               # argparse subcommands (menu/sources/discover/check/run/web/schedule/…)
+├── pipeline.py          # orchestration: discover → process → reachability
+├── config.py            # TOML loading + layered overrides (tomllib)
+├── models.py            # IPRecord, Filters, normalisation helpers
+├── logging_setup.py     # logging configuration
+├── discovery/           # pluggable sources (shared Source interface)
+│   ├── base.py          #   Source ABC + DiscoveryContext + offline fallback
 │   ├── rdap.py  whois.py  asn_bgp.py  peeringdb.py  rir.py
 ├── processing/
-│   ├── normalize.py     # حذف تکراری، ادغام متادیتا، فشرده‌سازی پیشوند
-│   └── filters.py       # کشور/ASN/ارائه‌دهنده/سازمان + تمرکز ایران/خارجی
+│   ├── normalize.py     # dedupe, merge metadata, collapse prefixes
+│   └── filters.py       # country/ASN/provider/org + Iran/foreign focus
 ├── reachability/
-│   ├── local.py         # بررسی زنده‌بودن ping/tcp/auto (هم‌زمان)
-│   ├── ports.py         # پروب پورت TCP
-│   └── global_check.py  # واسط AbroadProvider: check-host.net + RIPE Atlas (اختیاری)
+│   ├── local.py         # ping/tcp/auto liveness checks (concurrent)
+│   ├── ports.py         # TCP port probing
+│   └── global_check.py  # AbroadProvider interface: check-host.net + RIPE Atlas
 ├── reporting/
 │   ├── console.py  json_export.py  csv_export.py
-├── interactive/         # اسکنر تعاملی و منویی سلامت IP
-│   ├── menu.py          #   حلقهٔ نازکِ منو (فقط ورودی/خروجی + dispatch)
-│   ├── actions/         #   منطقِ هر عمل، جدا از ترمینال (scan/discover/history/…)
-│   ├── scanner.py       #   رِنج‌ها ← جستجوی زنده ← اسکن تأخیر/خارج/پورت ← دسته‌بندی
-│   ├── pinger.py        #   اندازه‌گیری چندسکویی تأخیر و اتلاف
-│   ├── classify.py      #   امتیازدهی GOOD / MEDIUM / BAD + CombinedResult دوطرفه
-│   ├── ranges.py        #   فهرست‌های CIDR داخلی و قابل‌ویرایش ایران/خارجی
-│   ├── storage.py       #   نگهداری تاریخچهٔ اسکن در SQLite (مهاجرتِ افزایشی)
-│   ├── scheduler.py     #   اسکن‌های زمان‌بندی‌شدهٔ دوره‌ای
-│   ├── alerts.py        #   تشخیص تغییر وضعیت + webhook اختیاری
-│   ├── providers.py     #   دادهٔ منابع + refresh/validate و نشانهٔ last_validated
-│   ├── filters_shared.py #  توابعِ مشترکِ منو و وب (octet/بره‌ایپی/جست‌وجوی جزئی)
+├── interactive/         # interactive menu-driven IP health scanner
+│   ├── menu.py          #   thin menu loop (I/O + dispatch only)
+│   ├── actions/         #   per-action logic, decoupled from the terminal
+│   ├── scanner.py       #   ranges → live sweep → latency/abroad/port scan → grading
+│   ├── pinger.py        #   cross-platform latency and loss measurement
+│   ├── classify.py      #   GOOD/MEDIUM/BAD grading + bidirectional CombinedResult
+│   ├── ranges.py        #   bundled, editable Iranian/foreign CIDR lists
+│   ├── storage.py       #   SQLite scan history (incremental migrations)
+│   ├── scheduler.py     #   recurring scheduled scans
+│   ├── alerts.py        #   verdict-change detection + optional webhook
+│   ├── providers.py     #   seed data + refresh/validate and last_validated marker
+│   ├── filters_shared.py #  predicates shared by the menu and the web layer
+│   ├── theme.py         #   shared ANSI palette + table renderer (TTY-aware)
 │   ├── settings.py  progress.py  report.py  paths.py
-│   └── data/            #   providers.toml و فهرست‌های داخلیِ رِنج
-├── web/                 # داشبورد وب محلی (server/handlers/jobs/auth/summary + static)
-└── utils/http.py        # HTTP مبتنی بر کتابخانهٔ استاندارد با retry/timeout
+│   └── data/            #   providers.toml and bundled range lists
+├── web/                 # local dashboard
+│   ├── server.py        #   http.server adapter (bind, TLS, static assets)
+│   ├── lifecycle.py     #   the single shutdown path (SIGINT/SIGTERM coordinator)
+│   ├── handlers.py      #   routing, auth middleware, JSON handlers
+│   ├── jobs.py          #   cancellable background job manager
+│   ├── auth.py  daemon.py  summary.py  assets.py
+│   └── static/          #   index.html, app.css, app.js (no build step)
+└── utils/http.py        # stdlib HTTP with retry/timeout
 ```
 
-> برای شرحِ کاملِ معماری (خط‌لوله، تفاوتِ مسیر CLI و منو، شمای SQLite، تفکیکِ
-> `Config`/`Filters` از `Settings`، و واسط ارائه‌دهنده‌های بررسیِ خارج) به
-> [`docs/architecture.md`](docs/architecture.md) نگاه کنید.
+> For the full architectural description (the pipeline, how the CLI and menu
+> paths differ, the SQLite schema, the `Config`/`Filters` vs `Settings` split,
+> and the abroad-provider interface) see
+> [`docs/architecture.md`](docs/architecture.md).
 
-**اصول طراحی:** ماژولار و توسعه‌پذیر (افزودن یک منبع با پیاده‌سازی `Source` و ثبت آن)،
-بدون وابستگی، خرابی‌پذیرِ نرم (یک منبع یا میزبانِ خراب هرگز کل اجرا را متوقف نمی‌کند)، و
-کاملاً قابل‌آزمون به‌صورت آفلاین از طریق تزریق وابستگی و دادهٔ نمونهٔ داخلی.
+**Design principles:** modular and extensible (add a source by implementing
+`Source` and registering it), dependency-free, fail-soft (one broken source or
+host never aborts a run), and fully testable offline through dependency
+injection and bundled sample data.
 
 ---
 
-## تست و توسعه
+## Testing and development
 
 ```bash
-python -m pytest                    # یا: PYTHONPATH=src python -m pytest
-python -m pip install -e ".[dev]"   # نصب همراه با ابزارهای توسعه
-make check                          # لینت + تست (دروازهٔ CI)
-make cov                            # تست همراه با گزارش پوشش
-make build                          # ساخت sdist + wheel و بررسی با twine
+python -m pytest                    # or: PYTHONPATH=src python -m pytest
+python -m pip install -e ".[dev]"   # install with development tools
+make check                          # lint + tests (the CI gate)
+make cov                            # tests with a coverage report
+make build                          # build sdist + wheel and check with twine
 ```
 
-مجموعهٔ تست کاملاً آفلاین است (بدون تماس واقعی با شبکه): منابع از دادهٔ نمونهٔ داخلی استفاده
-می‌کنند و دسترس‌پذیری monkeypatch می‌شود. برای جزئیات گردش‌کار به
-[CONTRIBUTING.md](CONTRIBUTING.md) و برای تاریخچهٔ نسخه‌ها به [CHANGELOG.md](CHANGELOG.md) نگاه کنید.
+The test suite is fully offline — sources use bundled sample data and
+reachability is monkeypatched, so no real network calls are made. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for workflow details and
+[CHANGELOG.md](CHANGELOG.md) for release history.
 
 ---
 
-## استفادهٔ مسئولانه
+## Responsible use
 
-این ابزار شناساییِ شبکه و تست دسترس‌پذیری انجام می‌دهد. فقط روی شبکه‌ها و میزبان‌هایی از آن
-استفاده کنید که مالک آن‌ها هستید یا صراحتاً مجاز به بررسیِ آن‌ها شده‌اید. بررسی‌های سراسری،
-آدرس‌های هدف را به یک سرویس شخص ثالث (check-host.net) ارسال می‌کنند.
+This tool performs network reconnaissance and reachability testing. **Only use
+it on networks and hosts you own or are explicitly authorised to probe.**
+Global checks send target addresses to a third-party service
+(check-host.net).
 
-## مجوز
+It is intended for network operators, researchers, and administrators
+diagnosing connectivity and reachability. Do not use it to probe infrastructure
+without permission.
 
-MIT — به [LICENSE](LICENSE) نگاه کنید.
+## License
+
+MIT — see [LICENSE](LICENSE).
