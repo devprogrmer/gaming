@@ -3,9 +3,23 @@ from __future__ import annotations
 import io
 import re
 
+import pytest
+
 from gaming.interactive import theme
 
 _ANSI = re.compile(r"\033\[[0-9;]*m")
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_no_color(monkeypatch):
+    """Ensure NO_COLOR from the ambient environment can't decide these tests.
+
+    `_supports_color` honours NO_COLOR by design, so a CI runner (or a
+    developer) exporting it would otherwise turn every "colour is emitted"
+    assertion into a false failure. The test that covers NO_COLOR sets it
+    explicitly.
+    """
+    monkeypatch.delenv("NO_COLOR", raising=False)
 
 
 class _TTY(io.StringIO):

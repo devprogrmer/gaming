@@ -131,6 +131,15 @@ class JobManager:
             jobs = list(self._jobs.values())
         return [j for j in jobs if j.status in (_PENDING, _RUNNING)]
 
+    def threads(self) -> list[threading.Thread]:
+        """Worker threads this manager started (snapshot).
+
+        Scoped to this manager, so callers can reason about their own jobs
+        rather than every thread in the process.
+        """
+        with self._lock:
+            return list(self._threads.values())
+
     def cancel_all(self) -> int:
         """Signal every in-flight job to stop. Returns how many were signalled."""
         active = self.active()

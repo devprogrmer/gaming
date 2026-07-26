@@ -415,6 +415,18 @@ def test_shutdown_releases_socket_for_immediate_rebind(tmp_path, monkeypatch):
 
     monkeypatch.setattr(server, "_detect_server_ip", lambda: "127.0.0.1")
 
+    # Capture the real server instance so the test can assert its socket was
+    # closed, rather than inferring cleanup from a rebind that SO_REUSEADDR
+    # would allow either way.
+    captured: dict = {"httpd": None}
+    real_httpd_cls = server.ThreadingHTTPServer
+
+    def _capturing_httpd(addr, handler):
+        captured["httpd"] = real_httpd_cls(addr, handler)
+        return captured["httpd"]
+
+    monkeypatch.setattr(server, "ThreadingHTTPServer", _capturing_httpd)
+
     lines: list[str] = []
     result = {}
 
@@ -444,14 +456,28 @@ def test_shutdown_releases_socket_for_immediate_rebind(tmp_path, monkeypatch):
     assert not thread.is_alive(), "serve() did not return after shutdown"
     assert result["rc"] == 0
 
-    # The real assertion: rebind the same port immediately, no SO_REUSEADDR.
-    rebound = socket.socket()
+    # The listening socket must actually be closed, not merely unreferenced.
+    #
+    # This is asserted on the socket object rather than by re-binding the port:
+    # the server sets SO_REUSEADDR (allow_reuse_address = 1), so a rebind
+    # succeeds even when server_close() never ran -- a rebind check passes
+    # against a leaked socket and guards nothing. Conversely a *bare* socket
+    # bind would fail on macOS/BSD for an unrelated reason, since the
+    # connection opened above leaves the port in TIME_WAIT.
+    assert captured["httpd"] is not None
+    assert captured["httpd"].socket.fileno() == -1, (
+        "listening socket was not closed; server_close() did not run"
+    )
+
+    # And a real restart on the same port succeeds, the way the app does it.
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
     try:
-        rebound.bind(("127.0.0.1", port))
+        restarted = ThreadingHTTPServer(("127.0.0.1", port), BaseHTTPRequestHandler)
     except OSError as exc:
-        pytest.fail(f"socket was not released; rebind failed: {exc}")
-    finally:
-        rebound.close()
+        pytest.fail(f"restart could not bind the same port: {exc}")
+    else:
+        restarted.server_close()
 
     assert "Web panel stopped." in "\n".join(lines)
 
@@ -491,10 +517,12 @@ def test_shutdown_during_active_scan_job_cancels_and_joins(tmp_path):
     # The worker observed the cancel flag and returned on its own.
     assert job.status == "cancelled"
     assert job.cancelled()
-    # And its thread is really gone, not merely orphaned.
-    assert not [
-        t for t in threading.enumerate() if t.name.startswith("job-") and t.is_alive()
-    ]
+    # And its thread is really gone, not merely orphaned. Scope this to *this*
+    # manager's threads: asserting over threading.enumerate() would also catch
+    # deliberately-leaked workers from other tests (the bounded-drain test
+    # strands one on purpose), making the result depend on execution order.
+    assert jobs.active() == []
+    assert not [t for t in jobs.threads() if t.is_alive()]
     # It stopped early rather than running all 200 steps to completion.
     assert len(steps) < 200
 
@@ -522,8 +550,10 @@ def test_shutdown_is_bounded_when_a_job_ignores_cancellation(tmp_path):
     coordinator.shutdown()
     elapsed = time.monotonic() - start
 
-    # Bounded by the drain timeout, not by the job's 30s sleep.
-    assert elapsed < 5, f"shutdown blocked for {elapsed:.1f}s"
+    # Bounded by the drain timeout, not by the job's 30s sleep. The threshold
+    # sits far from both bounds so a slow/loaded CI runner cannot flip it: it
+    # only has to distinguish "~0.5s" from "hung for 30s".
+    assert elapsed < 15, f"shutdown blocked for {elapsed:.1f}s"
     # And it says so honestly instead of claiming a clean stop.
     assert "did not stop in time" in "\n".join(lines)
 
@@ -635,14 +665,28 @@ def test_signal_handler_requests_stop_without_blocking(tmp_path):
         def server_close(self):
             pass
 
+    # A job manager whose drain would block for a long time if the handler were
+    # to run cleanup inline. This asserts the actual property -- the handler
+    # defers the drain -- instead of timing the call, which is flaky on a
+    # loaded CI runner.
+    drained = threading.Event()
+
+    class _SlowJobs:
+        def drain(self, timeout=5.0):
+            drained.set()
+            time.sleep(30)
+            return []
+
     httpd = _FakeHTTPD()
-    coordinator = ShutdownCoordinator(httpd=httpd, print_fn=lambda _s: None)
+    coordinator = ShutdownCoordinator(
+        httpd=httpd, jobs=_SlowJobs(), print_fn=lambda _s: None
+    )
 
-    start = time.monotonic()
     coordinator._handle_signal(signal_mod.SIGINT, None)
-    elapsed = time.monotonic() - start
 
-    assert elapsed < 0.5, "signal handler did real work inline"
+    # Returned without draining: the multi-second wait happens on the thread
+    # in wait_for_shutdown(), never inside the signal handler.
+    assert not drained.is_set(), "signal handler ran the job drain inline"
     assert coordinator.stopping.is_set()
     # The listener stop is dispatched to another thread (calling shutdown()
     # from the serve_forever() thread would deadlock).
