@@ -64,7 +64,11 @@ def parse_delegated_networks(
         start, value = parts[3], parts[4]
         try:
             if kind == "ipv6":
-                yield ipaddress.IPv6Network(f"{start}/{int(value)}", strict=False), cc, status
+                yield (
+                    ipaddress.IPv6Network(f"{start}/{int(value)}", strict=False),
+                    cc,
+                    status,
+                )
                 continue
             count = int(value)
             if count <= 0:

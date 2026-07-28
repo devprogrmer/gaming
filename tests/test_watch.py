@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import threading
-
 import pytest
 
 from gaming.interactive import watch as watch_mod

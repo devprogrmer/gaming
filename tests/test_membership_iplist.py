@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from gaming.interactive import membership, ranges as ranges_mod
+from gaming.interactive import membership
+from gaming.interactive import ranges as ranges_mod
 from gaming.models import IPRecord
 from gaming.reporting import export, to_ip_list
 

@@ -384,6 +384,10 @@ def summarize(records: Iterable[IPRecord]) -> dict[str, int]:
         "unnamed": len(records) - named,
         "asns": len({r.asn for r in records if r.asn}),
         "organizations": len(
-            {r.organization for r in records if r.organization and r.organization != UNNAMED_ORG}
+            {
+                r.organization
+                for r in records
+                if r.organization and r.organization != UNNAMED_ORG
+            }
         ),
     }

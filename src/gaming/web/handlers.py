@@ -741,8 +741,8 @@ def _start_exhaustive(app: WebApp, req: Request) -> Response:
     save = bool(data.get("save", True))
 
     def _work(job) -> dict[str, Any]:
-        from ..discovery.exhaustive import ExhaustiveSweep, summarize
         from ..discovery.base import DiscoveryContext
+        from ..discovery.exhaustive import ExhaustiveSweep, summarize
         from ..models import Filters
 
         def _progress(p) -> None:

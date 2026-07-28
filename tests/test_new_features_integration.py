@@ -8,10 +8,10 @@ import pytest
 
 from gaming.cli import main
 from gaming.interactive import ranges as ranges_mod
+from gaming.interactive.storage import HistoryStore
 from gaming.models import IPRecord
 from gaming.web.auth import CredentialStore, RateLimiter
 from gaming.web.handlers import Request, WebApp
-from gaming.interactive.storage import HistoryStore
 
 
 @pytest.fixture(autouse=True)
@@ -294,7 +294,7 @@ def api(tmp_path):
 
 
 def _post(app, creds, path, body):
-    token = creds.ensure_credentials()[0]
+    creds.ensure_credentials()
     resp = app.handle(
         Request(
             method="POST",

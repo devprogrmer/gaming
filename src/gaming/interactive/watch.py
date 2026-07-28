@@ -25,7 +25,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from ..logging_setup import get_logger
-from . import alerts, ranges as ranges_mod, scanner
+from . import alerts, scanner
+from . import ranges as ranges_mod
 from .settings import Settings, load_settings
 from .storage import HistoryStore
 

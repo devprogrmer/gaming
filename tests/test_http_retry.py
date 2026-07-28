@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import urllib.error
+from datetime import UTC
 from email.message import Message
 
 import pytest
@@ -93,10 +94,10 @@ def test_retry_after_is_capped(net):
 
 
 def test_retry_after_http_date_is_understood(net):
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
     from email.utils import format_datetime
 
-    when = datetime.now(timezone.utc) + timedelta(seconds=20)
+    when = datetime.now(UTC) + timedelta(seconds=20)
     net["responses"] = [
         _http_error(429, {"Retry-After": format_datetime(when)}),
         _Resp(b"ok"),

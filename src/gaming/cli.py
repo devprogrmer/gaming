@@ -930,7 +930,9 @@ def cmd_check_membership(args: argparse.Namespace, config: Config) -> int:
     out = sys.stdout
     if result.found:
         out.write(
-            theme.heading(f"{result.ip} matches {len(result.matches)} stored range(s)", out)
+            theme.heading(
+                f"{result.ip} matches {len(result.matches)} stored range(s)", out
+            )
             + "\n"
         )
         columns = [

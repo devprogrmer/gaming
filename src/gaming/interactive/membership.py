@@ -142,9 +142,9 @@ def live_lookup(ip: str, *, timeout: float = 5.0) -> dict[str, object] | None:
     except ValueError:
         return None
 
+    from ..discovery.base import DiscoveryContext
     from ..discovery.rdap import RDAPSource, _vcard_field
     from ..models import Filters
-    from ..discovery.base import DiscoveryContext
     from ..utils.http import HTTPError, get_json
 
     context = DiscoveryContext(filters=Filters(), timeout=timeout)
@@ -159,7 +159,11 @@ def live_lookup(ip: str, *, timeout: float = 5.0) -> dict[str, object] | None:
 
     org, country = source._parse_autnum(data)
     handle = data.get("handle") if isinstance(data.get("handle"), str) else None
-    start = data.get("startAddress") if isinstance(data.get("startAddress"), str) else None
+    start = (
+        data.get("startAddress")
+        if isinstance(data.get("startAddress"), str)
+        else None
+    )
     end = data.get("endAddress") if isinstance(data.get("endAddress"), str) else None
     cidr = _cidr_from_range(start, end) or handle
 
