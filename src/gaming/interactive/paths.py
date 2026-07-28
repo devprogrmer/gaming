@@ -77,3 +77,23 @@ def web_pid_path() -> Path:
 def web_log_path() -> Path:
     """Path to the log file a daemonized ``gaming web`` redirects output to."""
     return app_home() / "web.log"
+
+
+def watch_pid_path() -> Path:
+    """Path to the PID file for a daemonized ``gaming watch`` process."""
+    return app_home() / "watch.pid"
+
+
+def watch_log_path() -> Path:
+    """Path to the log file a daemonized ``gaming watch`` redirects output to."""
+    return app_home() / "watch.log"
+
+
+def exhaustive_journal_path(country: str) -> Path:
+    """Path to the resume journal for an exhaustive sweep of ``country``.
+
+    One journal per country so concurrent sweeps of different countries cannot
+    clobber each other's progress.
+    """
+    slug = "".join(ch for ch in country.upper() if ch.isalnum()) or "XX"
+    return app_home() / f"exhaustive_{slug}.json"

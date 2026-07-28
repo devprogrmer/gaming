@@ -54,7 +54,12 @@ _SCOPE_CATEGORIES = {
 _GROUPS = (*SCOPES, *CATEGORIES)
 
 #: Valid origin markers for a stored custom/discovered entry.
-_ORIGINS = ("custom", "discovered")
+#: ``discovered_exhaustive`` distinguishes a full-country sweep result from a
+#: curated seed-list discovery, so a user can tell where a range came from.
+_ORIGINS = ("custom", "discovered", "discovered_exhaustive")
+
+#: Origin marker for ranges found by a full-country exhaustive sweep.
+EXHAUSTIVE_ORIGIN = "discovered_exhaustive"
 
 _BUNDLED = {
     "iran": "iran_ranges.txt",
@@ -216,18 +221,23 @@ def save_discovered(
     cidrs: Iterable[str] | Iterable[RangeEntry],
     *,
     metadata: dict[str, tuple[str | None, str | None]] | None = None,
+    origin: str = "discovered",
 ) -> int:
     """Persist auto-discovered CIDRs under a category. Returns count newly added.
 
     ``cidrs`` may be plain CIDR strings or :class:`RangeEntry` objects. Optional
     ``metadata`` maps a CIDR to ``(country, provider)`` used when a plain string
-    is given. CIDRs already stored under the category (custom *or* discovered)
-    are skipped, so repeated discovery never duplicates. Invalid CIDRs are
-    ignored rather than raising.
+    is given. ``origin`` records *how* the range was found (``discovered`` for a
+    seed-list pass, :data:`EXHAUSTIVE_ORIGIN` for a full-country sweep). CIDRs
+    already stored under the category (custom *or* discovered) are skipped, so
+    repeated discovery never duplicates. Invalid CIDRs are ignored rather than
+    raising.
     """
     category = _validate_group(category)
     if category not in CATEGORIES:
         raise ValueError(f"save_discovered expects a category, got {category!r}")
+    if origin not in _ORIGINS:
+        raise ValueError(f"unknown origin: {origin!r}")
     metadata = metadata or {}
     data = _read_custom()
     existing = {e.cidr for e in data[category]}
@@ -244,8 +254,11 @@ def save_discovered(
         if normalized in metadata:  # normalized form may differ from the key
             country, provider = metadata[normalized]
         existing.add(normalized)
+        entry_origin = raw.origin if isinstance(raw, RangeEntry) else origin
+        if entry_origin not in _ORIGINS:
+            entry_origin = origin
         data[category].append(
-            RangeEntry(normalized, "discovered", country, provider)
+            RangeEntry(normalized, entry_origin, country, provider)
         )
         added += 1
     if added:
@@ -284,6 +297,58 @@ def persist_records(records: Iterable[object]) -> dict[str, int]:
     added: dict[str, int] = {}
     for category, entries in grouped.items():
         count = save_discovered(category, entries)
+        if count:
+            added[category] = count
+    return added
+
+
+def persist_exhaustive_records(
+    records: Iterable[object],
+    *,
+    home_country: str = "IR",
+) -> dict[str, int]:
+    """Persist full-country sweep results without dropping obscure operators.
+
+    :func:`persist_records` buckets via
+    :func:`gaming.processing.filters.classify_category`, which returns ``None``
+    — meaning "skip this record" — unless the organization text matches a
+    datacenter/CDN keyword. That is the right call for a seed-list pass, but it
+    is fatal for an exhaustive sweep: a real hosting company named e.g.
+    "Fooberg Ltd" matches no keyword and would be silently discarded, which is
+    precisely the blind spot exhaustive mode exists to remove.
+
+    So this path falls back to bucketing by **country** when the classifier
+    declines: an allocation in ``home_country`` becomes ``iran_datacenter``,
+    anything else ``foreign_datacenter``. CDN classification still wins when it
+    applies, so Cloudflare/ArvanCloud land in their ``*_cdn`` buckets exactly as
+    before. Everything is tagged :data:`EXHAUSTIVE_ORIGIN` so a full-country
+    sweep stays distinguishable from curated discovery.
+
+    Returns a ``{category: newly_added_count}`` mapping.
+    """
+    from ..processing.filters import classify_category
+
+    home = (home_country or "IR").upper()
+    grouped: dict[str, list[RangeEntry]] = {}
+    for rec in records:
+        prefix = getattr(rec, "prefix", None)
+        if not prefix:
+            continue
+        country = getattr(rec, "country", None)
+        category = classify_category(rec)
+        if category is None:
+            is_home = bool(country) and str(country).upper() == home
+            category = "iran_datacenter" if is_home else "foreign_datacenter"
+        provider = getattr(rec, "provider", None) or getattr(
+            rec, "organization", None
+        )
+        grouped.setdefault(category, []).append(
+            RangeEntry(prefix, EXHAUSTIVE_ORIGIN, country, provider)
+        )
+
+    added: dict[str, int] = {}
+    for category, entries in grouped.items():
+        count = save_discovered(category, entries, origin=EXHAUSTIVE_ORIGIN)
         if count:
             added[category] = count
     return added

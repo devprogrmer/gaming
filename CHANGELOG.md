@@ -6,6 +6,36 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-28
+
+### Added
+- **Exhaustive country-wide IP range discovery** (`gaming discover --country IR --exhaustive`).
+  Queries RIR delegated-statistics files and resolves every allocated prefix via RIPEstat,
+  RDAP, and WHOIS — surfacing real but obscure hosting companies with the same full detail
+  (CIDR, ASN, organization, country) as well-known providers. Allocations with no public
+  org name are kept and labelled `(unnamed / no public org name)` rather than dropped.
+  Resumable across interruptions (journal persisted atomically), rate-limit friendly
+  (429 exponential back-off, 404 fast-skip), and stored with a distinct
+  `discovered_exhaustive` origin marker. Flags: `--exhaustive`, `--no-ipv6`,
+  `--no-resume`, `--save`.
+- **24/7 continuous watch mode** (`gaming watch --country IR --interval 1h`). Loops
+  discovery → persist → scan → sleep indefinitely, reusing the existing daemon PID-file
+  machinery so it survives SSH disconnect (`--daemon`/`--stop`/`--status`). Fail-soft:
+  one bad iteration logs the error and continues. Configurable interval (`30m`, `2h`,
+  `1d`, or bare seconds); minimum floor of 5 minutes to protect registries. Also
+  startable and stoppable from the web dashboard (`POST /api/watch`).
+- **`--format ip-list` bare-IP output.** Emits one host address per line with no
+  metadata, safe for shell redirection (`gaming discover --format ip-list > ips.txt`).
+  Progress, "saved", and "written:" messages go to stderr so stdout stays a pure IP
+  list. Available on `discover`, `run`, and `check`; also exported from the web
+  dashboard (`GET /api/export?kind=ip-list`).
+- **Reverse IP membership lookup** (`gaming check-membership <ip>`). Checks an address
+  against every stored CIDR across all categories using `ipaddress` membership; reports
+  all matches (most specific first) with CIDR, group, origin, country, and provider.
+  `--live` falls back to a live RDAP lookup when nothing stored matches. `--json` for
+  machine-readable output. Exit codes: 0 = match found, 1 = not found, 2 = invalid IP.
+  Also available in the web dashboard (`POST /api/lookup-ip`).
+
 ## [0.8.0] - 2026-07-26
 
 This release is about **real Ctrl+C reliability** plus a **visual/UX overhaul**
@@ -505,7 +535,9 @@ across the web dashboard, the terminal UI, and the documentation.
 - CLI subcommands: `sources`, `discover`, `check`, `run`.
 - Test suite (52 tests, fully offline) and packaging for distribution.
 
-[Unreleased]: https://github.com/devprogrmer/gaming/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/devprogrmer/gaming/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/devprogrmer/gaming/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/devprogrmer/gaming/compare/v0.7.0...v0.8.0
 [0.5.0]: https://github.com/devprogrmer/gaming/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/devprogrmer/gaming/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/devprogrmer/gaming/compare/v0.2.0...v0.3.0

@@ -30,6 +30,8 @@ dashboard.
   - [Command line](#command-line)
   - [Web dashboard](#web-dashboard)
   - [Scheduled scans and alerts](#scheduled-scans-and-alerts)
+  - [Exhaustive discovery and continuous watch](#exhaustive-discovery-and-continuous-watch)
+  - [IP membership lookup](#ip-membership-lookup)
   - [Seed data maintenance](#seed-data-maintenance)
 - [How scanning works](#how-scanning-works)
 - [Exporting results](#exporting-results)
@@ -237,7 +239,7 @@ Run `gaming` with no arguments (or `gaming menu`):
 
 ```
 ==================================================
-   devprogrmer * IP Health Scanner   (v0.8.0)
+   devprogrmer * IP Health Scanner   (v0.9.0)
 ==================================================
   1) Scan saved ranges (datacenter / CDN / both)
   2) Discover & save provider ranges
@@ -358,6 +360,85 @@ gaming sources                    # sources + "seed data last validated: …"
 Both commands are strictly read-only with respect to provider entries: they
 flag CIDRs that no longer appear in any announced prefix, but never add, edit,
 or delete a provider.
+
+### Exhaustive discovery and continuous watch
+
+**Exhaustive country-wide discovery** queries RIR delegated-statistics files
+and resolves every allocated prefix via RIPEstat, RDAP, and WHOIS — surfacing
+real but obscure hosting companies with the same full detail (CIDR, ASN,
+organization, country) as well-known providers. Allocations with no public org
+name are kept and labelled `(unnamed / no public org name)` rather than
+dropped.
+
+```bash
+# discover every allocated range for Iran, save to local storage
+gaming discover --country IR --exhaustive --save
+
+# same, but skip IPv6 and start fresh (ignore any saved resume state)
+gaming discover --country IR --exhaustive --save --no-ipv6 --no-resume
+
+# pipe a bare IP list directly to another tool
+gaming discover --country IR --exhaustive --format ip-list | sort -u > ips.txt
+```
+
+The sweep is resumable: if interrupted it picks up where it left off. Rate
+limits are handled automatically (429 exponential back-off, 404 fast-skip).
+Saved ranges carry the `discovered_exhaustive` origin marker so they are
+distinguishable from hand-curated entries.
+
+**Continuous watch mode** loops discovery → persist → scan → sleep
+indefinitely, reusing the daemon PID-file machinery so it survives SSH
+disconnect:
+
+```bash
+# run in the foreground, one iteration per hour
+gaming watch --country IR --interval 1h
+
+# detach to the background (same --stop/--status as gaming web)
+gaming watch --country IR --interval 1h --daemon
+
+# check whether the watcher is running
+gaming watch --status
+
+# stop it cleanly
+gaming watch --stop
+
+# run exactly 5 iterations and exit (useful for testing)
+gaming watch --country IR --interval 30m --count 5
+```
+
+Interval accepts `30m`, `2h`, `1d`, or bare seconds (minimum 5 minutes).
+One bad iteration logs the error and continues — the watcher never stops on
+its own. The watch loop is also startable and stoppable from the web dashboard.
+
+**`--format ip-list`** emits one host address per line with no metadata, safe
+for shell redirection. Progress, "saved N ranges", and "written: …" messages
+go to stderr so stdout stays a pure IP list:
+
+```bash
+gaming discover --country IR --exhaustive --format ip-list > ips.txt
+gaming discover --iran-datacenter --format ip-list -o ips.txt
+```
+
+### IP membership lookup
+
+Check which stored CIDR an address belongs to:
+
+```bash
+# table output — shows CIDR, group, origin, country, provider
+gaming check-membership 5.22.7.1
+
+# fall back to a live RDAP lookup when nothing stored matches
+gaming check-membership 203.0.113.7 --live
+
+# machine-readable JSON
+gaming check-membership 5.22.7.1 --json
+```
+
+Exit codes: **0** = at least one match found, **1** = not found, **2** =
+invalid IP address. Overlapping prefixes are all reported, most specific first.
+The same lookup is available in the web dashboard under **IP Lookup**
+(`POST /api/lookup-ip`).
 
 ---
 

@@ -7,6 +7,8 @@ Subcommands:
     check     run reachability/ports/global checks on given prefixes
     run       full pipeline: discover -> process -> reachability -> report
     update    upgrade the installation in place to a new release
+    watch     continuously re-discover a country and re-scan it, 24/7
+    check-membership  reverse lookup: which stored range contains an IP?
 
 Running ``gaming`` with no subcommand launches the interactive menu.
 """
@@ -14,6 +16,7 @@ Running ``gaming`` with no subcommand launches the interactive menu.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from . import __version__
@@ -35,11 +38,16 @@ def _add_common_output_args(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--format",
         "-f",
-        choices=["console", "json", "csv"],
+        choices=["console", "json", "csv", "ip-list"],
         default="console",
-        help="output format (default: console)",
+        help=(
+            "output format (default: console). 'ip-list' prints bare IP "
+            "addresses only, one per line — it DISCARDS ALL METADATA "
+            "(no CIDR, ASN, organization or country) by design, for piping "
+            "into other tools; use json/csv for auditing"
+        ),
     )
-    p.add_argument("--output", "-o", help="write output to this file (json/csv)")
+    p.add_argument("--output", "-o", help="write output to this file")
 
 
 def _add_filter_args(p: argparse.ArgumentParser) -> None:
@@ -98,6 +106,32 @@ def build_parser() -> argparse.ArgumentParser:
     p_disc.add_argument("--sources", help="comma-separated subset of sources to use")
     p_disc.add_argument(
         "--collapse", action="store_true", help="collapse adjacent/contained prefixes"
+    )
+    p_disc.add_argument(
+        "--exhaustive",
+        action="store_true",
+        help=(
+            "full country sweep: enumerate EVERY delegated IPv4/IPv6 prefix for "
+            "--country from RIR delegated statistics and resolve each one's ASN "
+            "and registered organization, instead of only the curated seed "
+            "providers. Finds small/obscure hosting companies the seed list has "
+            "never heard of. Slow (thousands of prefixes) but resumable"
+        ),
+    )
+    p_disc.add_argument(
+        "--no-ipv6",
+        action="store_true",
+        help="exhaustive mode: skip IPv6 allocations",
+    )
+    p_disc.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="exhaustive mode: ignore any saved progress and start over",
+    )
+    p_disc.add_argument(
+        "--save",
+        action="store_true",
+        help="persist discovered ranges for later scans",
     )
 
     # check
@@ -208,6 +242,81 @@ def build_parser() -> argparse.ArgumentParser:
         help="report whether a background dashboard is running and exit",
     )
 
+    # watch (continuous discover -> scan loop, 24/7)
+    p_watch = sub.add_parser(
+        "watch",
+        help="continuously re-discover a country's ranges and re-scan them",
+    )
+    p_watch.add_argument(
+        "--country",
+        default="IR",
+        help="country code to watch (default: IR)",
+    )
+    p_watch.add_argument(
+        "--interval",
+        default="1h",
+        help="time between iterations: 30m, 1h, 2d, or bare seconds "
+        "(default: 1h; floored at 5m)",
+    )
+    p_watch.add_argument(
+        "--scope",
+        default="iran",
+        choices=["iran", "foreign"],
+        help="which stored scope to re-scan each iteration (default: iran)",
+    )
+    p_watch.add_argument(
+        "--no-ipv6",
+        action="store_true",
+        help="skip IPv6 allocations during the discovery step",
+    )
+    p_watch.add_argument(
+        "--count",
+        type=int,
+        default=0,
+        help="stop after N iterations (default: 0 = run until stopped)",
+    )
+    p_watch.add_argument(
+        "-d",
+        "--daemon",
+        action="store_true",
+        help="run in the background, detached from the terminal/SSH session "
+        "(survives disconnect); writes a PID file for --stop/--status",
+    )
+    p_watch.add_argument(
+        "--stop",
+        action="store_true",
+        help="stop a running background watch (via its PID file) and exit",
+    )
+    p_watch.add_argument(
+        "--status",
+        action="store_true",
+        help="report whether a background watch is running and exit",
+    )
+
+    # check-membership (reverse lookup: which stored range holds this IP?)
+    p_member = sub.add_parser(
+        "check-membership",
+        help="find which stored CIDR(s) contain a given IP address",
+    )
+    p_member.add_argument("ip", help="the IPv4/IPv6 address to look up")
+    p_member.add_argument(
+        "--live",
+        action="store_true",
+        help="if the address matches nothing stored, query RDAP for its real "
+        "operator instead of only reporting 'not found'",
+    )
+    p_member.add_argument(
+        "--no-bundled",
+        action="store_true",
+        help="search only custom/discovered ranges, skipping the shipped lists",
+    )
+    p_member.add_argument(
+        "--json",
+        dest="as_json",
+        action="store_true",
+        help="emit the result as JSON instead of a table",
+    )
+
     # refresh-seeds (re-validate bundled provider CIDRs against live BGP)
     p_refresh = sub.add_parser(
         "refresh-seeds",
@@ -294,13 +403,14 @@ def _emit(records: list[IPRecord], args: argparse.Namespace) -> None:
     text = export(records, args.format, getattr(args, "output", None))
     if args.format == "console":
         sys.stdout.write(text)
-    else:
-        # For json/csv, always print to stdout; also written to file if -o given.
-        sys.stdout.write(text)
-        if not text.endswith("\n"):
-            sys.stdout.write("\n")
-        if getattr(args, "output", None):
-            sys.stderr.write(f"written: {args.output}\n")
+        return
+    # json/csv/ip-list: the payload is the only thing on stdout, so it can be
+    # redirected or piped verbatim. Anything advisory goes to stderr.
+    sys.stdout.write(text)
+    if text and not text.endswith("\n"):
+        sys.stdout.write("\n")
+    if getattr(args, "output", None):
+        sys.stderr.write(f"written: {args.output}\n")
 
 
 # ---- command handlers ----------------------------------------------------
@@ -353,11 +463,64 @@ def cmd_sources(args: argparse.Namespace, config: Config) -> int:
 
 def cmd_discover(args: argparse.Namespace, config: Config) -> int:
     filters = _filters_from_args(args, config)
-    sources = _split_csv(args.sources) or None
-    raw = discover(config, filters, sources=sources)
-    records = process(raw, filters, collapse=args.collapse)
+    if getattr(args, "exhaustive", False):
+        records = _discover_exhaustive(args, config, filters)
+    else:
+        sources = _split_csv(args.sources) or None
+        raw = discover(config, filters, sources=sources)
+        records = process(raw, filters, collapse=args.collapse)
+    if getattr(args, "save", False):
+        _save_records(records, exhaustive=getattr(args, "exhaustive", False))
     _emit(records, args)
     return 0
+
+
+def _discover_exhaustive(
+    args: argparse.Namespace, config: Config, filters: Filters
+) -> list[IPRecord]:
+    """Full-country sweep: every delegated prefix, not just seeded providers."""
+    from .discovery.base import DiscoveryContext
+    from .discovery.exhaustive import ExhaustiveSweep
+
+    countries = filters.countries or ["IR"]
+    context = DiscoveryContext(filters=filters, timeout=config.timeout)
+
+    records: list[IPRecord] = []
+    for country in countries:
+        sweep = ExhaustiveSweep(
+            country=country,
+            context=context,
+            include_ipv6=not getattr(args, "no_ipv6", False),
+            resume=not getattr(args, "no_resume", False),
+            progress_callback=None if args.quiet else _sweep_progress,
+        )
+        records.extend(sweep.run())
+    if not args.quiet:
+        sys.stderr.write("\n")
+    return records
+
+
+def _sweep_progress(progress) -> None:
+    """Render sweep advancement on stderr so stdout stays pipeable."""
+    sys.stderr.write(
+        f"\r{progress.country}: {progress.done}/{progress.total} prefixes "
+        f"({progress.named} named, {progress.unnamed} unnamed, "
+        f"{progress.errors} error(s))   "
+    )
+    sys.stderr.flush()
+
+
+def _save_records(records: list[IPRecord], *, exhaustive: bool) -> None:
+    """Persist discovered records to the stored range lists."""
+    from .interactive import ranges as ranges_mod
+
+    if exhaustive:
+        added = ranges_mod.persist_exhaustive_records(records)
+    else:
+        added = ranges_mod.persist_records(records)
+    total = sum(added.values())
+    detail = ", ".join(f"{k}: {v}" for k, v in sorted(added.items())) or "none"
+    sys.stderr.write(f"saved {total} new range(s) ({detail})\n")
 
 
 def cmd_check(args: argparse.Namespace, config: Config) -> int:
@@ -644,6 +807,161 @@ def _print_schedule_run(state) -> None:
         )
 
 
+def cmd_watch(args: argparse.Namespace, config: Config) -> int:
+    """Run the continuous discover -> persist -> scan watch loop.
+
+    Lifecycle flags (``--stop``/``--status``/``--daemon``) reuse the same
+    PID-file machinery as ``gaming web``, just pointed at the watch PID file, so
+    a backgrounded watcher outlives the SSH session that started it.
+    """
+    from .interactive import paths
+    from .interactive.watch import WatchLoop, parse_interval
+    from .web import daemon as daemon_mod
+
+    pid_path = paths.watch_pid_path()
+
+    if getattr(args, "stop", False):
+        stopped = daemon_mod.stop(pid_path)
+        sys.stdout.write(
+            "Stopped the background watch.\n"
+            if stopped
+            else "No running background watch found.\n"
+        )
+        return 0
+
+    if getattr(args, "status", False):
+        st = daemon_mod.status(pid_path)
+        if st.running:
+            import datetime as _dt
+
+            when = (
+                _dt.datetime.fromtimestamp(st.since).isoformat(timespec="seconds")
+                if st.since
+                else "unknown"
+            )
+            sys.stdout.write(f"Watch is running (PID {st.pid}, since {when}).\n")
+        else:
+            sys.stdout.write("Watch is not running.\n")
+        return 0
+
+    country = getattr(args, "country", "IR")
+    interval = parse_interval(getattr(args, "interval", "1h"))
+    count = getattr(args, "count", 0)
+
+    if getattr(args, "daemon", False):
+        existing = daemon_mod.status(pid_path)
+        if existing.running:
+            sys.stderr.write(
+                f"A background watch is already running (PID {existing.pid}). "
+                "Use 'gaming watch --stop' first, or 'gaming watch --status'.\n"
+            )
+            return 1
+        try:
+            daemon_mod.daemonize(paths.watch_log_path())
+        except daemon_mod.DaemonError as exc:
+            sys.stderr.write(f"{exc}\n")
+            return 1
+        daemon_mod.write_pid(os.getpid(), pid_path)
+
+    loop = WatchLoop(
+        country=country,
+        interval_seconds=interval,
+        scope=getattr(args, "scope", "iran"),
+        include_ipv6=not getattr(args, "no_ipv6", False),
+        on_iteration=None if args.quiet else _print_watch_iteration,
+    )
+
+    if not args.quiet:
+        sys.stdout.write(
+            f"Watching {loop.country} every {loop.interval:.0f}s "
+            f"(scope: {loop.scope}). Press Ctrl-C to stop.\n"
+        )
+        sys.stdout.flush()
+
+    try:
+        loop.run_forever(max_iterations=max(0, count))
+    except KeyboardInterrupt:
+        sys.stdout.write("\nStopping watch...\n")
+        loop.stop()
+    finally:
+        if getattr(args, "daemon", False):
+            daemon_mod.remove_pid(pid_path)
+    return 0
+
+
+def _print_watch_iteration(state) -> None:
+    persisted = sum(state.last_persisted.values())
+    line = (
+        f"[{state.country}] iteration #{state.iterations + 1}: "
+        f"{state.last_discovered} prefix(es) discovered, {persisted} newly stored, "
+        f"{state.last_scanned} host(s) scanned"
+    )
+    if state.last_scan_id is not None:
+        line += f" (scan id={state.last_scan_id})"
+    if state.last_changes:
+        line += f", {state.last_changes} verdict change(s)"
+    sys.stdout.write(line + "\n")
+    for err in state.errors:
+        sys.stdout.write(f"  ! {err}\n")
+    sys.stdout.flush()
+
+
+def cmd_check_membership(args: argparse.Namespace, config: Config) -> int:
+    """Report which stored CIDR(s) contain a given IP address."""
+    import json as _json
+
+    from .interactive import membership, theme
+
+    try:
+        result = membership.lookup_ip(
+            args.ip, include_bundled=not getattr(args, "no_bundled", False)
+        )
+    except ValueError as exc:
+        sys.stderr.write(f"invalid IP address: {exc}\n")
+        return 2
+
+    if not result.found and getattr(args, "live", False):
+        result.live = membership.live_lookup(args.ip, timeout=config.timeout)
+
+    if getattr(args, "as_json", False):
+        sys.stdout.write(_json.dumps(result.as_dict(), indent=2) + "\n")
+        return 0 if result.found else 1
+
+    out = sys.stdout
+    if result.found:
+        out.write(
+            theme.heading(f"{result.ip} matches {len(result.matches)} stored range(s)", out)
+            + "\n"
+        )
+        columns = [
+            theme.Column("CIDR"),
+            theme.Column("CATEGORY"),
+            theme.Column("ORIGIN"),
+            theme.Column("COUNTRY"),
+            theme.Column("ORGANIZATION"),
+        ]
+        rows = [
+            [m.cidr, m.group, m.origin, m.country or "-", m.provider or "-"]
+            for m in result.matches
+        ]
+        out.write(theme.render_table(columns, rows, stream=out))
+        return 0
+
+    out.write(f"{result.ip} is not inside any stored range.\n")
+    if result.live:
+        out.write("\n")
+        out.write(theme.heading("Live registry lookup", out) + "\n")
+        for key in ("cidr", "organization", "country", "source"):
+            value = result.live.get(key)
+            if value:
+                out.write(theme.key_value(f"{key}:", str(value), stream=out) + "\n")
+    elif getattr(args, "live", False):
+        out.write("Live registry lookup returned nothing (offline or unregistered).\n")
+    else:
+        out.write("Re-run with --live to ask the registries who owns it.\n")
+    return 1
+
+
 _HANDLERS = {
     "menu": cmd_menu,
     "sources": cmd_sources,
@@ -655,6 +973,8 @@ _HANDLERS = {
     "refresh-seeds": cmd_refresh_seeds,
     "validate-seed": cmd_validate_seed,
     "schedule": cmd_schedule,
+    "watch": cmd_watch,
+    "check-membership": cmd_check_membership,
 }
 
 

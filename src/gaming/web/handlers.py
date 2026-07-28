@@ -180,8 +180,12 @@ class WebApp:
         self.route("GET", "/api/settings", _get_settings)
         self.route("POST", "/api/settings", _save_settings)
         self.route("GET", "/api/summary", _summary)
-        self.route("GET", "/api/export", _export)  # ?kind=csv|json|whitelist&scan=...
+        self.route("GET", "/api/export", _export)  # ?kind=csv|json|whitelist|ip-list
         self.route("POST", "/api/proximity-ping", _start_proximity_ping)
+        self.route("POST", "/api/lookup-ip", _lookup_ip)
+        self.route("POST", "/api/discover-exhaustive", _start_exhaustive)
+        self.route("GET", "/api/watch", _watch_status)
+        self.route("POST", "/api/watch", _watch_control)
 
 
 def _redirect(location: str) -> Response:
@@ -605,6 +609,14 @@ def _export(app: WebApp, req: Request) -> Response:
             filename=f"scan-{scan_id}.csv",
             content_type="text/csv; charset=utf-8",
         )
+    if kind in ("ip-list", "ip_list", "iplist"):
+        from ..reporting import to_ip_list
+
+        return Response.download(
+            to_ip_list(records),
+            filename=f"scan-{scan_id}-ips.txt",
+            content_type="text/plain; charset=utf-8",
+        )
     from ..reporting import to_json
 
     return Response.download(
@@ -680,3 +692,156 @@ def _record_dict(rec) -> dict[str, Any]:
         "country": getattr(rec, "country", None),
         "provider": getattr(rec, "provider", None),
     }
+
+
+# --------------------------------------------------------------------------
+# Reverse IP lookup — "which of my stored ranges contains this address?"
+# --------------------------------------------------------------------------
+def _lookup_ip(app: WebApp, req: Request) -> Response:
+    """Look one IP up against every stored CIDR.
+
+    Mirrors ``gaming check-membership``: same module, same match ordering, same
+    optional live-RDAP fallback, so the dashboard and the CLI can never diverge
+    on what "this IP belongs to X" means.
+    """
+    data = req.json()
+    ip = str(data.get("ip", "")).strip()
+    if not ip:
+        return Response.json({"error": "ip is required"}, status=400)
+
+    from ..interactive import membership
+
+    try:
+        result = membership.lookup_ip(
+            ip, include_bundled=bool(data.get("include_bundled", True))
+        )
+    except ValueError:
+        return Response.json({"error": f"{ip!r} is not a valid IP address"}, status=400)
+
+    if not result.found and data.get("live"):
+        result.live = membership.live_lookup(ip)
+
+    return Response.json(result.as_dict())
+
+
+# --------------------------------------------------------------------------
+# Exhaustive country discovery — long-running, so it runs as a tracked job
+# --------------------------------------------------------------------------
+def _start_exhaustive(app: WebApp, req: Request) -> Response:
+    """Kick off a full-country sweep in the background job manager.
+
+    A sweep resolves thousands of prefixes and can run for minutes, far past
+    any sane HTTP timeout, so the response is a job id the UI polls via
+    ``/api/jobs`` — the same pattern the search endpoint uses.
+    """
+    data = req.json()
+    country = str(data.get("country", "IR")).strip().upper() or "IR"
+    include_ipv6 = bool(data.get("include_ipv6", True))
+    resume = bool(data.get("resume", True))
+    save = bool(data.get("save", True))
+
+    def _work(job) -> dict[str, Any]:
+        from ..discovery.exhaustive import ExhaustiveSweep, summarize
+        from ..discovery.base import DiscoveryContext
+        from ..models import Filters
+
+        def _progress(p) -> None:
+            job.progress = (p.done / p.total) if p.total else 0.0
+
+        sweep = ExhaustiveSweep(
+            country=country,
+            context=DiscoveryContext(filters=Filters(countries=[country])),
+            include_ipv6=include_ipv6,
+            resume=resume,
+            progress_callback=_progress,
+        )
+        records = sweep.run()
+        saved: dict[str, int] = {}
+        if save:
+            from ..interactive import ranges as ranges_mod
+
+            saved = ranges_mod.persist_exhaustive_records(
+                records, home_country=country
+            )
+        job.progress = 1.0
+        return {
+            "country": country,
+            "count": len(records),
+            "summary": summarize(records),
+            "saved": saved,
+            "records": [_record_dict(r) for r in records],
+        }
+
+    job = app.jobs.start("discover-exhaustive", _work, meta={"country": country})
+    return Response.json({"job_id": job.id})
+
+
+# --------------------------------------------------------------------------
+# 24/7 watch controls — one in-process loop, shared with `gaming watch`
+# --------------------------------------------------------------------------
+#: The dashboard-owned watch loop, if one is running. Module-level because the
+#: loop must outlive any single request, and only one may run per process.
+_WATCH_LOOP: Any = None
+
+
+def _watch_status(app: WebApp, req: Request) -> Response:
+    """Report the in-process loop, plus any detached ``gaming watch --daemon``."""
+    from ..interactive import paths
+    from . import daemon as daemon_mod
+
+    loop = _WATCH_LOOP
+    daemon_status = daemon_mod.status(paths.watch_pid_path())
+    return Response.json(
+        {
+            "running": bool(loop is not None and loop.running),
+            "state": loop.state.as_dict() if loop is not None else None,
+            "daemon": {
+                "running": daemon_status.running,
+                "pid": daemon_status.pid,
+                "since": daemon_status.since,
+            },
+        }
+    )
+
+
+def _watch_control(app: WebApp, req: Request) -> Response:
+    """Start or stop the dashboard's watch loop.
+
+    Uses the exact same :class:`~gaming.interactive.watch.WatchLoop` as the CLI
+    rather than a parallel implementation, so a watch started from the browser
+    behaves identically to one started from a terminal.
+    """
+    global _WATCH_LOOP
+
+    data = req.json()
+    action = str(data.get("action", "")).strip().lower()
+
+    if action == "stop":
+        loop = _WATCH_LOOP
+        if loop is None or not loop.running:
+            return Response.json({"running": False, "stopped": False})
+        loop.stop()
+        _WATCH_LOOP = None
+        return Response.json({"running": False, "stopped": True})
+
+    if action != "start":
+        return Response.json({"error": "action must be 'start' or 'stop'"}, status=400)
+
+    if _WATCH_LOOP is not None and _WATCH_LOOP.running:
+        return Response.json(
+            {"error": "a watch is already running", "state": _WATCH_LOOP.state.as_dict()},
+            status=409,
+        )
+
+    from ..interactive.watch import WatchLoop, parse_interval
+
+    loop = WatchLoop(
+        country=str(data.get("country", "IR")).strip().upper() or "IR",
+        interval_seconds=parse_interval(data.get("interval", "1h")),
+        scope=str(data.get("scope", "iran")).strip().lower() or "iran",
+        include_ipv6=bool(data.get("include_ipv6", True)),
+        store=app.store,
+    )
+    loop.start()
+    _WATCH_LOOP = loop
+    return Response.json({"running": True, "state": loop.state.as_dict()})
