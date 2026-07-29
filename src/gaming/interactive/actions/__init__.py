@@ -12,6 +12,7 @@ from .context import ActionContext
 from .discover import discover_and_save
 from .filter_octet import auto_scan_matched, filter_by_first_octet
 from .history import history
+from .provider_lookup_action import lookup_provider
 from .ranges_action import manage_ranges
 from .scan import discover_save_scan_provider, full_scan_hosts, scan_saved
 from .settings_action import edit_settings
@@ -31,4 +32,5 @@ __all__ = [
     "filter_by_first_octet",
     "auto_scan_matched",
     "launch_web_panel",
+    "lookup_provider",
 ]

@@ -97,6 +97,7 @@ _MENU_OPTIONS = [
     ("7", "Filter CIDRs by first octet"),
     ("8", "Discover, save & scan a provider"),
     ("9", "Launch web panel"),
+    ("10", "Look up a datacenter/provider by name"),
     ("0", "Exit"),
 ]
 
@@ -217,6 +218,8 @@ class Menu:
                     self._dispatch(actions.discover_save_scan_provider)
                 elif choice == "9":
                     self._dispatch(actions.launch_web_panel)
+                elif choice == "10":
+                    self._dispatch(actions.lookup_provider)
                 elif choice in ("0", "q", "quit", "exit"):
                     self._print("Goodbye.")
                     return 0

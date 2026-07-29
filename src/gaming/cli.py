@@ -133,6 +133,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="persist discovered ranges for later scans",
     )
+    p_disc.add_argument(
+        "--provider-name",
+        metavar="NAME",
+        help=(
+            "look one organization up by name in the live registries (RDAP) "
+            "instead of running the seeded discovery sources. Unlike "
+            "--provider, which only filters already-fetched results by "
+            "substring, this finds companies absent from the bundled seed file"
+        ),
+    )
 
     # check
     p_check = sub.add_parser("check", help="run reachability checks on given prefixes")
@@ -476,6 +486,8 @@ def cmd_sources(args: argparse.Namespace, config: Config) -> int:
 
 def cmd_discover(args: argparse.Namespace, config: Config) -> int:
     filters = _filters_from_args(args, config)
+    if getattr(args, "provider_name", None):
+        return _discover_by_provider_name(args, config)
     if getattr(args, "exhaustive", False):
         records = _discover_exhaustive(args, config, filters)
     else:
@@ -486,6 +498,31 @@ def cmd_discover(args: argparse.Namespace, config: Config) -> int:
         _save_records(records, exhaustive=getattr(args, "exhaustive", False))
     _emit(records, args)
     return 0
+
+
+def _discover_by_provider_name(args: argparse.Namespace, config: Config) -> int:
+    """Resolve one named organization through the shared lookup function.
+
+    Returns 1 when the name is simply not registered and 2 when no registry
+    could be reached, so a script can tell "this provider does not exist" from
+    "the lookup did not happen" without parsing the message.
+    """
+    from .discovery import provider_lookup
+
+    result = provider_lookup.lookup_provider_by_name(
+        args.provider_name, timeout=max(config.timeout, 15.0)
+    )
+    if getattr(args, "save", False) and result.found:
+        _save_records(result.records, exhaustive=False)
+
+    if args.format == "console":
+        sys.stdout.write(provider_lookup.render_lookup(result, sys.stdout))
+    else:
+        _emit(result.records, args)
+
+    if result.all_sources_failed:
+        return 2
+    return 0 if result.found else 1
 
 
 def _discover_exhaustive(

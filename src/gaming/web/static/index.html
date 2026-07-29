@@ -74,6 +74,16 @@
             </div>
             <p id="search-status" class="status-line muted"></p>
           </div>
+          <div class="panel">
+            <h3 class="panel-title">Look up a provider by name</h3>
+            <p class="panel-hint">Asks the registries (ARIN and RIPE) directly, so companies that are not in the bundled seed list are still found.</p>
+            <div class="controls">
+              <input id="pl-name" placeholder="exact organization name, e.g. Zenlayer" />
+              <button id="pl-btn">Look up</button>
+            </div>
+            <p id="pl-status" class="status-line muted"></p>
+          </div>
+          <div class="table-wrap"><table id="pl-table"></table></div>
           <div class="table-wrap"><table id="search-table"></table></div>
         </section>
 
@@ -95,6 +105,10 @@
               <label class="chk"><input type="radio" name="scan-mode" value="combined" checked /> Scan all together</label>
               <label class="chk"><input type="radio" name="scan-mode" value="sequential" /> Scan one at a time</label>
               <button id="scan-btn">Scan saved ranges</button>
+            </div>
+            <div class="controls" style="margin-top: var(--s3);">
+              <input id="scan-cidr" placeholder="or type a CIDR, e.g. 185.143.232.0/24" />
+              <button id="scan-cidr-btn" class="secondary">Scan this CIDR</button>
             </div>
             <div class="controls" style="margin-top: var(--s3);">
               <label class="chk"><input type="checkbox" id="whitelist-only" /> Show whitelist matches only</label>

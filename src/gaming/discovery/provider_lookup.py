@@ -113,6 +113,34 @@ class ProviderLookupResult:
             "Note that only ARIN and RIPE support search by name."
         )
 
+    def as_dict(self) -> dict[str, Any]:
+        """JSON-ready form for the web surface.
+
+        ``found`` and ``lookup_failed`` are both sent so the browser can render
+        the three outcomes distinctly instead of inferring "no such provider"
+        from an empty list — the misleading behaviour this feature replaces.
+        """
+        return {
+            "name": self.name,
+            "found": self.found,
+            "lookup_failed": self.all_sources_failed,
+            "summary": self.summary(),
+            "organizations": self.organizations,
+            "sources_queried": list(self.sources_queried),
+            "errors": list(self.errors),
+            "records": [
+                {
+                    "prefix": rec.prefix,
+                    "asn": rec.asn,
+                    "organization": rec.organization,
+                    "country": rec.country,
+                    "provider": rec.provider,
+                    "notes": rec.notes,
+                }
+                for rec in self.records
+            ],
+        }
+
 
 def lookup_provider_by_name(
     name: str,
@@ -388,3 +416,47 @@ def _quote(value: str) -> str:
     from urllib.parse import quote
 
     return quote(value, safe="")
+
+
+def render_lookup(result: ProviderLookupResult, stream: Any = None) -> str:
+    """Render a lookup outcome as text, shared by the CLI and the menu.
+
+    Both terminal surfaces call this rather than formatting the result
+    themselves, so a lookup can never be described one way by ``gaming
+    discover --provider-name`` and another by the menu.
+    """
+    import sys
+
+    from ..interactive import theme
+
+    stream = stream or sys.stdout
+    out = [theme.heading(f"Provider lookup: {result.name}", stream), ""]
+
+    if not result.found:
+        out.append(theme.style(result.summary(), "warn", stream))
+        out.append("")
+        return "\n".join(out)
+
+    out.append(result.summary())
+    out.append("")
+    columns = [
+        theme.Column("CIDR"),
+        theme.Column("ASN"),
+        theme.Column("COUNTRY"),
+        theme.Column("ORGANIZATION"),
+    ]
+    rows = [
+        [rec.prefix, rec.asn or "-", rec.country or "-", rec.organization or "-"]
+        for rec in result.records
+    ]
+    out.append(theme.render_table(columns, rows, stream=stream))
+    if result.errors:
+        out.append(
+            theme.style(
+                f"Some registries could not be reached: {'; '.join(result.errors)}",
+                "warn",
+                stream,
+            )
+        )
+        out.append("")
+    return "\n".join(out)

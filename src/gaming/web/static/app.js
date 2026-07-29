@@ -221,10 +221,23 @@ function sortBy(tableEl, columns, rows, i) {
 }
 
 // ---- search --------------------------------------------------------------
+// A row's action jumps to the Live Scan view and scans that one range, so a
+// search result can be probed directly instead of being copied out by hand.
+function scanRowAction(row) {
+  const btn = el("button", { class: "row-btn" }, "Scan");
+  btn.addEventListener("click", () => {
+    navigate("scan");
+    $("#scan-cidr").value = row.prefix;
+    startScan({ cidrs: [row.prefix] });
+  });
+  return btn;
+}
+
 const SEARCH_COLUMNS = [
   { key: "prefix", label: "CIDR" }, { key: "asn", label: "ASN", num: true },
   { key: "organization", label: "ORG" }, { key: "country", label: "CC" },
   { key: "provider", label: "PROVIDER" },
+  { key: "prefix", label: "", action: scanRowAction },
 ];
 
 $("#search-btn").addEventListener("click", async () => {
@@ -270,6 +283,63 @@ $("#search-btn").addEventListener("click", async () => {
   });
 });
 
+// ---- provider lookup by name --------------------------------------------
+// Distinct from Search: Search filters ranges already fetched from the seed
+// data and discovery sources, so a company absent from those is invisible to
+// it. This asks the registries about the name directly.
+const PL_COLUMNS = [
+  { key: "prefix", label: "CIDR" }, { key: "asn", label: "ASN", num: true },
+  { key: "country", label: "CC" }, { key: "organization", label: "ORGANIZATION" },
+  { key: "prefix", label: "", action: scanRowAction },
+];
+
+$("#pl-btn").addEventListener("click", async () => {
+  const name = $("#pl-name").value.trim();
+  if (!name) {
+    setStatus("#pl-status", "");
+    $("#pl-status").append(banner("warn", "Enter a provider name first", ""));
+    return;
+  }
+  setStatus("#pl-status", `Asking the registries about “${name}”…`, { busy: true });
+  $("#pl-table").innerHTML = "";
+  clearEmpty("#pl-table");
+
+  const r = await api("/api/provider-lookup", { method: "POST", body: { name } });
+  if (!r.ok) {
+    setStatus("#pl-status", "");
+    $("#pl-status").append(banner("error", "Lookup could not be started",
+      (r.data && r.data.error) || `HTTP ${r.status}`));
+    return;
+  }
+  pollJob(r.data.job_id, (job) => {
+    if (job.status === "error") {
+      setStatus("#pl-status", "");
+      $("#pl-status").append(banner("error", "Lookup failed", job.error || ""));
+      return;
+    }
+    if (job.status !== "done") return;
+    const res = job.result || {};
+    setStatus("#pl-status", "");
+    // Three distinct outcomes: found, no such org, and registries unreachable.
+    if (res.lookup_failed) {
+      $("#pl-status").append(banner("error", "No registry could be reached",
+        (res.errors || []).join("; ")));
+      return;
+    }
+    if (!res.found) {
+      showEmpty("#pl-table", `No organization named “${res.name}”`, res.summary, "?");
+      return;
+    }
+    setStatus("#pl-status", res.summary);
+    if ((res.errors || []).length) {
+      $("#pl-status").append(banner("warn", "Some registries were unreachable",
+        res.errors.join("; ")));
+    }
+    renderTable($("#pl-table"), PL_COLUMNS, res.records);
+    clearEmpty("#pl-table");
+  });
+});
+
 function pollJob(jobId, onUpdate, tries = 0) {
   api(`/api/jobs?id=${encodeURIComponent(jobId)}`).then((r) => {
     if (!r.ok) { onUpdate({ status: "error", error: "job lost" }); return; }
@@ -291,7 +361,26 @@ function pollJob(jobId, onUpdate, tries = 0) {
 let lastScanId = null;
 let lastScanMode = "combined";
 
-$("#scan-btn").addEventListener("click", async () => {
+$("#scan-btn").addEventListener("click", () =>
+  startScan({ category: $("#scan-category").value }));
+
+// Scan one typed-in range. Same job endpoint, same polling, same table -- the
+// only difference from the category scan is which CIDRs the request names.
+$("#scan-cidr-btn").addEventListener("click", () => {
+  const cidr = $("#scan-cidr").value.trim();
+  if (!cidr) {
+    setStatus("#scan-status", "");
+    $("#scan-status").append(banner("warn", "Enter a CIDR first",
+      "For example 185.143.232.0/24, or a single address."));
+    return;
+  }
+  startScan({ cidrs: [cidr] });
+});
+
+// Kick off a scan from anywhere in the app. `scope` supplies either a
+// `category` or an explicit `cidrs` list; everything downstream is identical,
+// which is why a per-CIDR scan needed no new scanner or job machinery.
+async function startScan(scope) {
   const mode = (document.querySelector('input[name="scan-mode"]:checked') || {}).value || "combined";
   lastScanMode = mode;
   setStatus("#scan-status", mode === "sequential"
@@ -301,12 +390,13 @@ $("#scan-btn").addEventListener("click", async () => {
   $("#dl-whitelist").disabled = true;
   $("#scan-counts").innerHTML = "";
   $("#scan-table").innerHTML = "";
+  clearEmpty("#scan-table");
   $("#scan-table-wrap").classList.toggle("hidden", mode === "sequential");
   $("#scan-sequential-wrap").classList.toggle("hidden", mode !== "sequential");
   $("#scan-sequential-wrap").innerHTML = "";
 
   const r = await api("/api/scan", {
-    method: "POST", body: { category: $("#scan-category").value, mode },
+    method: "POST", body: Object.assign({ mode }, scope),
   });
   if (!r.ok) {
     hideProgress("#scan-progress");
@@ -369,7 +459,7 @@ $("#scan-btn").addEventListener("click", async () => {
       }
     }
   });
-});
+}
 
 $("#whitelist-only").addEventListener("change", () => {
   if (lastScanMode === "sequential" && lastSequentialResult) renderSequentialScan(lastSequentialResult);

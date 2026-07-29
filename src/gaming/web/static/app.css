@@ -330,6 +330,13 @@ button.secondary:hover:not(:disabled) { background: var(--surface-3); }
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
+/* One line of context under a panel title, for panels whose behaviour is not
+ * obvious from the controls alone. */
+.panel-hint {
+  margin: calc(-1 * var(--s2)) 0 var(--s3);
+  font-size: 13px;
+  color: var(--text-muted);
+}
 
 .controls {
   display: flex;

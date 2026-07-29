@@ -1154,3 +1154,114 @@ def test_asset_loader_blocks_traversal():
     assert assets.load_asset("app.css") is not None
     assert assets.load_asset("../secrets") is None
     assert assets.load_asset("a/b.css") is None
+
+
+# ---- scanning one caller-specified CIDR ----------------------------------
+def test_web_scan_one_specified_cidr_scans_only_that_range(env, monkeypatch):
+    """A single typed-in CIDR is scanned on its own, not as a whole category.
+
+    The category path expands every saved range in the bucket; naming one CIDR
+    must reach the same scanner with exactly that range and nothing else.
+    """
+    app, creds, pw = env
+    cookie = _login(app, creds, pw)
+
+    from gaming.interactive import scanner as scanner_mod
+
+    scanned: list[list[str]] = []
+
+    def _fake_run_scan(scope, settings, *, hosts=None, on_result=None):
+        scanned.append(list(hosts))
+        rows = [(ProbeResult(h, sent=4, received=4, avg_ms=5.0), GOOD) for h in hosts]
+        return scanner_mod.ScanReport(
+            scope=scope, results=rows, combined=[CombinedResult(p) for p, _ in rows]
+        )
+
+    monkeypatch.setattr(scanner_mod, "run_scan", _fake_run_scan)
+
+    start = app.handle(
+        _req("POST", "/api/scan", body={"cidrs": ["185.9.9.0/30"]}, cookie=cookie)
+    )
+    job = _poll_job_done(app, cookie, json.loads(start.body)["job_id"])
+
+    assert job["status"] == "done"
+    assert len(scanned) == 1
+    assert all(h.startswith("185.9.9.") for h in scanned[0])
+    # Same result shape as a category scan, so the UI renders it identically.
+    assert job["result"]["mode"] == "combined"
+    assert job["result"]["scan_id"] is not None
+
+
+def test_web_scan_rejects_a_malformed_cidr_with_a_clear_error(env):
+    """Bad input fails at the boundary, not deep inside the host expander."""
+    app, creds, pw = env
+    cookie = _login(app, creds, pw)
+
+    resp = app.handle(
+        _req("POST", "/api/scan", body={"cidrs": ["not-a-cidr"]}, cookie=cookie)
+    )
+    assert resp.status == 400
+    assert "not a valid CIDR" in json.loads(resp.body)["error"]
+
+
+def test_web_scan_rejects_an_empty_cidr_list(env):
+    app, creds, pw = env
+    cookie = _login(app, creds, pw)
+
+    resp = app.handle(_req("POST", "/api/scan", body={"cidrs": []}, cookie=cookie))
+    assert resp.status == 400
+    assert "no CIDRs" in json.loads(resp.body)["error"]
+
+
+def test_web_scan_accepts_a_bare_address_as_one_host(env, monkeypatch):
+    app, creds, pw = env
+    cookie = _login(app, creds, pw)
+
+    from gaming.interactive import scanner as scanner_mod
+
+    scanned: list[list[str]] = []
+
+    def _fake_run_scan(scope, settings, *, hosts=None, on_result=None):
+        scanned.append(list(hosts))
+        p = ProbeResult(hosts[0], sent=4, received=4, avg_ms=5.0)
+        return scanner_mod.ScanReport(
+            scope=scope, results=[(p, GOOD)], combined=[CombinedResult(p)]
+        )
+
+    monkeypatch.setattr(scanner_mod, "run_scan", _fake_run_scan)
+
+    start = app.handle(
+        _req("POST", "/api/scan", body={"cidrs": ["185.9.9.7"]}, cookie=cookie)
+    )
+    job = _poll_job_done(app, cookie, json.loads(start.body)["job_id"])
+    assert job["status"] == "done"
+    assert scanned == [["185.9.9.7"]]
+
+
+def test_web_scan_category_path_still_works_without_cidrs(env, monkeypatch):
+    """Regression guard: adding validation must not break the category scan."""
+    app, creds, pw = env
+    cookie = _login(app, creds, pw)
+
+    from gaming.interactive import ranges as ranges_mod
+    from gaming.interactive import scanner as scanner_mod
+
+    monkeypatch.setattr(
+        ranges_mod, "category_entries",
+        lambda _c: [ranges_mod.RangeEntry(cidr="203.0.113.0/30", origin="custom")],
+    )
+
+    def _fake_run_scan(scope, settings, *, hosts=None, on_result=None):
+        rows = [(ProbeResult(h, sent=4, received=4, avg_ms=5.0), GOOD) for h in hosts]
+        return scanner_mod.ScanReport(
+            scope=scope, results=rows, combined=[CombinedResult(p) for p, _ in rows]
+        )
+
+    monkeypatch.setattr(scanner_mod, "run_scan", _fake_run_scan)
+
+    start = app.handle(
+        _req("POST", "/api/scan", body={"category": "foreign_cdn"}, cookie=cookie)
+    )
+    job = _poll_job_done(app, cookie, json.loads(start.body)["job_id"])
+    assert job["status"] == "done"
+    assert job["result"]["results"]

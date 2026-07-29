@@ -183,6 +183,7 @@ class WebApp:
         self.route("GET", "/api/export", _export)  # ?kind=csv|json|whitelist|ip-list
         self.route("POST", "/api/proximity-ping", _start_proximity_ping)
         self.route("POST", "/api/lookup-ip", _lookup_ip)
+        self.route("POST", "/api/provider-lookup", _provider_lookup)
         self.route("POST", "/api/discover-exhaustive", _start_exhaustive)
         self.route("GET", "/api/watch", _watch_status)
         self.route("POST", "/api/watch", _watch_control)
@@ -326,6 +327,12 @@ def _run_scan(app: WebApp, req: Request) -> Response:
     if mode not in (_SCAN_MODE_COMBINED, _SCAN_MODE_SEQUENTIAL):
         mode = _SCAN_MODE_COMBINED
 
+    if cidrs is not None:
+        try:
+            cidrs = _validate_cidrs(cidrs)
+        except ValueError as exc:
+            return Response.json({"error": str(exc)}, status=400)
+
     if mode == _SCAN_MODE_SEQUENTIAL:
         def _work(job) -> dict[str, Any]:
             return _scan_sequential_and_store(app, cidrs, category, job)
@@ -339,6 +346,33 @@ def _run_scan(app: WebApp, req: Request) -> Response:
 
         job = app.jobs.start("scan", _work, meta={"category": category, "mode": mode})
     return Response.json({"job_id": job.id})
+
+
+def _validate_cidrs(cidrs: Any) -> list[str]:
+    """Normalize caller-supplied CIDRs, rejecting anything malformed.
+
+    Now that the browser can hand over a typed-in range, bad input has to fail
+    here with a clear message rather than several layers down inside the host
+    expander, where the error would surface as an opaque failed job. A bare
+    address is accepted and treated as a single host, matching ``gaming check``.
+    """
+    import ipaddress
+
+    if not isinstance(cidrs, list):
+        raise ValueError("cidrs must be a list of CIDR strings")
+    out: list[str] = []
+    for raw in cidrs:
+        text = str(raw).strip()
+        if not text:
+            continue
+        try:
+            network = ipaddress.ip_network(text, strict=False)
+        except ValueError:
+            raise ValueError(f"{text!r} is not a valid CIDR or IP address") from None
+        out.append(str(network))
+    if not out:
+        raise ValueError("no CIDRs given")
+    return out
 
 
 def _resolve_cidrs(cidrs: Any, category: str) -> tuple[list[str], list[str]]:
@@ -722,6 +756,32 @@ def _lookup_ip(app: WebApp, req: Request) -> Response:
         result.live = membership.live_lookup(ip)
 
     return Response.json(result.as_dict())
+
+
+# --------------------------------------------------------------------------
+# Provider lookup by name — the same shared function the CLI and menu call
+# --------------------------------------------------------------------------
+def _provider_lookup(app: WebApp, req: Request) -> Response:
+    """Resolve one organization name against the live registries.
+
+    Runs as a tracked job rather than inline: a RIPE entity search follows up
+    to a dozen handles, so the whole lookup can outlast an HTTP timeout. The
+    browser polls ``/api/jobs`` exactly as it does for search and scan.
+    """
+    data = req.json()
+    name = str(data.get("name", "")).strip()
+    if not name:
+        return Response.json({"error": "name is required"}, status=400)
+
+    def _work(job) -> dict[str, Any]:
+        from ..discovery import provider_lookup
+
+        result = provider_lookup.lookup_provider_by_name(name)
+        job.progress = 1.0
+        return result.as_dict()
+
+    job = app.jobs.start("provider-lookup", _work, meta={"name": name})
+    return Response.json({"job_id": job.id})
 
 
 # --------------------------------------------------------------------------
