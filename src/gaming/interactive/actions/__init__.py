@@ -18,6 +18,7 @@ from .scan import discover_save_scan_provider, full_scan_hosts, scan_saved
 from .settings_action import edit_settings
 from .update_action import update_installed_version
 from .web_action import launch_web_panel
+from .whats_new_action import whats_new, whats_new_notice
 
 __all__ = [
     "ActionContext",
@@ -33,4 +34,6 @@ __all__ = [
     "auto_scan_matched",
     "launch_web_panel",
     "lookup_provider",
+    "whats_new",
+    "whats_new_notice",
 ]

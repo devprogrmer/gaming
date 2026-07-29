@@ -164,7 +164,10 @@ function navigate(view) {
   if (title) title.textContent = VIEW_TITLES[view] || "Overview";
   if (view === "history") loadHistory();
   if (view === "settings") loadSettings();
-  if (view === "home") loadSummary();
+  if (view === "home") {
+    loadSummary();
+    loadWhatsNew();
+  }
 }
 for (const link of document.querySelectorAll(".nav-link"))
   link.addEventListener("click", () => navigate(link.dataset.view));
@@ -787,6 +790,46 @@ async function loadSummary() {
     panel.append(card);
   }
 }
+
+// ---- what's new since your last visit ------------------------------------
+// The ledger is written by the 24/7 watcher. Loading it does NOT acknowledge:
+// the stamp only moves when the user presses "Mark as seen", so a page load
+// cannot silently discard a notice nobody read. The stamp is per-surface, so
+// clearing it here leaves the terminal menu's notice intact.
+const WN_COLUMNS = [
+  { key: "prefix", label: "CIDR" },
+  { key: "category", label: "CATEGORY" },
+  { key: "asn", label: "ASN", num: true },
+  { key: "country", label: "CC" },
+  { key: "org", label: "ORGANIZATION" },
+  { key: "first_seen", label: "FIRST SEEN" },
+  { key: "prefix", label: "", action: scanRowAction },
+];
+
+let wnUpToId = 0;
+
+async function loadWhatsNew() {
+  const r = await api("/api/whats-new");
+  if (!r.ok) return;
+  const res = r.data || {};
+  wnUpToId = res.up_to_id || 0;
+  setStatus("#wn-status", res.summary || "");
+  $("#wn-ack").disabled = !res.has_new;
+  if (!res.has_new) {
+    $("#wn-table").innerHTML = "";
+    clearEmpty("#wn-table");
+    return;
+  }
+  renderTable($("#wn-table"), WN_COLUMNS, res.rows || []);
+  clearEmpty("#wn-table");
+}
+
+$("#wn-refresh").addEventListener("click", loadWhatsNew);
+$("#wn-ack").addEventListener("click", async () => {
+  // Acknowledge only what was rendered, so a watcher tick since the load stays new.
+  await api("/api/whats-new/ack", { method: "POST", body: { up_to_id: wnUpToId } });
+  loadWhatsNew();
+});
 
 window.addEventListener("hashchange", () => navigate(location.hash.replace("#", "") || "home"));
 boot();

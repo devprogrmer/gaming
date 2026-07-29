@@ -13,6 +13,7 @@ safe to open repeatedly (the schema is created on demand).
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterable
 from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -51,6 +52,24 @@ CREATE TABLE IF NOT EXISTS results (
 );
 
 CREATE INDEX IF NOT EXISTS idx_results_scan ON results(scan_id);
+
+CREATE TABLE IF NOT EXISTS discoveries (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    prefix     TEXT    NOT NULL UNIQUE,
+    category   TEXT,
+    asn        TEXT,
+    org        TEXT,
+    country    TEXT,
+    first_seen TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_discoveries_seen ON discoveries(first_seen);
+
+CREATE TABLE IF NOT EXISTS surface_visits (
+    surface      TEXT PRIMARY KEY,
+    last_visited TEXT NOT NULL,
+    last_id      INTEGER NOT NULL DEFAULT 0
+);
 """
 
 # Additive columns introduced for bidirectional reachability + port visibility.
@@ -65,6 +84,30 @@ _RESULTS_MIGRATIONS: tuple[tuple[str, str], ...] = (
     ("open_ports", "TEXT"),
     ("abroad_status", "TEXT"),
 )
+
+
+@dataclass(slots=True)
+class DiscoveryRow:
+    """One range the watcher saw for the first time, with when it saw it."""
+
+    id: int
+    prefix: str
+    category: str | None
+    asn: str | None
+    org: str | None
+    country: str | None
+    first_seen: str
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "prefix": self.prefix,
+            "category": self.category,
+            "asn": self.asn,
+            "org": self.org,
+            "country": self.country,
+            "first_seen": self.first_seen,
+        }
 
 
 @dataclass(slots=True)
@@ -108,6 +151,11 @@ class ResultRow:
 
 def _utc_now_iso() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat()
+
+
+def _text_or_none(value: object) -> str | None:
+    text = str(value).strip() if value is not None else ""
+    return text or None
 
 
 def _encode_ports(ports: list[int] | None) -> str | None:
@@ -300,6 +348,112 @@ class HistoryStore:
             )
             for r in rows
         ]
+
+    # ---- discovery ledger ("what's new since you last checked") ----------
+    def record_discoveries(self, rows: Iterable[dict[str, object]]) -> list[str]:
+        """Insert first-sightings, returning the prefixes actually recorded.
+
+        ``prefix`` is UNIQUE and inserts use ``OR IGNORE``, so a range already in
+        the ledger keeps its original ``first_seen`` instead of being bumped
+        forward on every sweep — otherwise every stored range would look new
+        again after each cycle.
+        """
+        payload = []
+        for row in rows:
+            prefix = str(row.get("prefix") or "").strip()
+            if not prefix:
+                continue
+            payload.append(
+                (
+                    prefix,
+                    _text_or_none(row.get("category")),
+                    _text_or_none(row.get("asn")),
+                    _text_or_none(row.get("org")),
+                    _text_or_none(row.get("country")),
+                    str(row.get("first_seen") or _utc_now_iso()),
+                )
+            )
+        if not payload:
+            return []
+        with closing(self._connect()) as conn, conn:
+            conn.executescript(_SCHEMA)
+            recorded = []
+            for values in payload:
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO discoveries "
+                    "(prefix, category, asn, org, country, first_seen) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    values,
+                )
+                if cur.rowcount:
+                    recorded.append(values[0])
+        return recorded
+
+    def discoveries_after(
+        self, after_id: int = 0, *, limit: int = 500
+    ) -> list[DiscoveryRow]:
+        """Ledger rows with an id greater than ``after_id``, oldest first.
+
+        The watermark is the row id rather than a timestamp because
+        ``first_seen`` has second resolution: a sweep landing in the same second
+        as an acknowledgement would be permanently skipped by a time comparison.
+        Ids are monotonic, so nothing can fall through.
+
+        Oldest-first ordering makes ``limit`` a contiguous window starting at the
+        watermark, so acknowledging what was shown never jumps over unread rows.
+        """
+        with closing(self._connect()) as conn, conn:
+            conn.executescript(_SCHEMA)
+            rows = conn.execute(
+                "SELECT * FROM discoveries WHERE id > ? ORDER BY id ASC LIMIT ?",
+                (int(after_id), int(limit)),
+            ).fetchall()
+        return [
+            DiscoveryRow(
+                id=r["id"],
+                prefix=r["prefix"],
+                category=r["category"],
+                asn=r["asn"],
+                org=r["org"],
+                country=r["country"],
+                first_seen=r["first_seen"],
+            )
+            for r in rows
+        ]
+
+    def last_visit(self, surface: str) -> tuple[str, int] | None:
+        """``(stamp, last_id)`` for ``surface``, or None if it never looked."""
+        with closing(self._connect()) as conn, conn:
+            conn.executescript(_SCHEMA)
+            row = conn.execute(
+                "SELECT last_visited, last_id FROM surface_visits WHERE surface = ?",
+                (str(surface),),
+            ).fetchone()
+        return (row["last_visited"], row["last_id"]) if row else None
+
+    def mark_visited(
+        self, surface: str, *, up_to_id: int | None = None, when: str | None = None
+    ) -> str:
+        """Record that ``surface`` has seen the ledger up to ``up_to_id``.
+
+        Each surface has its own row, so the menu reading its notice does not
+        clear the dashboard's and vice versa. ``up_to_id`` defaults to the whole
+        ledger; callers pass the highest row they actually displayed so a
+        discovery arriving mid-read is not marked as seen.
+        """
+        stamp = when or _utc_now_iso()
+        with closing(self._connect()) as conn, conn:
+            conn.executescript(_SCHEMA)
+            if up_to_id is None:
+                row = conn.execute("SELECT MAX(id) AS m FROM discoveries").fetchone()
+                up_to_id = row["m"] or 0
+            conn.execute(
+                "INSERT INTO surface_visits (surface, last_visited, last_id) "
+                "VALUES (?, ?, ?) ON CONFLICT(surface) DO UPDATE SET "
+                "last_visited = excluded.last_visited, last_id = excluded.last_id",
+                (str(surface), stamp, int(up_to_id)),
+            )
+        return stamp
 
     def clear(self) -> None:
         """Delete all saved scans and results."""

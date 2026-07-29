@@ -19,6 +19,7 @@ discovered ranges persisted. One bad iteration is logged and the loop continues
 
 from __future__ import annotations
 
+import ipaddress
 import threading
 import time
 from collections.abc import Callable
@@ -53,6 +54,10 @@ class WatchState:
     last_discovered: int = 0
     #: ``{category: newly_added}`` from the most recent persist step.
     last_persisted: dict[str, int] = field(default_factory=dict)
+    #: The CIDRs the most recent persist step actually inserted. Distinct from
+    #: ``last_discovered``, which counts everything the sweep returned including
+    #: ranges already stored.
+    last_new_prefixes: list[str] = field(default_factory=list)
     last_scan_id: int | None = None
     last_scanned: int = 0
     last_changes: int = 0
@@ -72,6 +77,7 @@ class WatchState:
             "iterations": self.iterations,
             "last_discovered": self.last_discovered,
             "last_persisted": dict(self.last_persisted),
+            "last_new_prefixes": list(self.last_new_prefixes),
             "last_scan_id": self.last_scan_id,
             "last_scanned": self.last_scanned,
             "last_changes": self.last_changes,
@@ -201,14 +207,67 @@ class WatchLoop:
     def _persist(self, state: WatchState, records: list) -> None:
         if not records:
             state.last_persisted = {}
+            state.last_new_prefixes = []
             return
         try:
-            state.last_persisted = ranges_mod.persist_exhaustive_records(
+            inserted = ranges_mod.persist_exhaustive_prefixes(
                 records, home_country=self.country
             )
         except Exception as exc:  # noqa: BLE001 - scan can still proceed
             self._note(state, "persist", exc)
             state.last_persisted = {}
+            state.last_new_prefixes = []
+            return
+
+        state.last_persisted = {k: len(v) for k, v in inserted.items()}
+        state.last_new_prefixes = [p for prefixes in inserted.values() for p in prefixes]
+        self._record_ledger(state, records, inserted)
+
+    def _record_ledger(
+        self, state: WatchState, records: list, inserted: dict[str, list[str]]
+    ) -> None:
+        """Write the genuinely-new ranges to the durable "what's new" ledger.
+
+        Only prefixes the persist step actually inserted are recorded, so a
+        re-run of the same sweep adds nothing and the menu/dashboard notice does
+        not resurrect ranges the user has already been told about. Failing here
+        must not abort the iteration: the ranges are already stored and scannable
+        either way.
+        """
+        by_prefix: dict[str, object] = {}
+        for rec in records:
+            raw = str(getattr(rec, "prefix", "") or "")
+            if not raw:
+                continue
+            by_prefix[raw] = rec
+            # Persisting normalizes the prefix, so the inserted string need not
+            # equal the record's own; index both forms to keep the metadata.
+            try:
+                by_prefix.setdefault(
+                    str(ipaddress.ip_network(raw, strict=False)), rec
+                )
+            except ValueError:
+                pass
+        rows: list[dict[str, object]] = []
+        for category, prefixes in inserted.items():
+            for prefix in prefixes:
+                rec = by_prefix.get(prefix)
+                rows.append(
+                    {
+                        "prefix": prefix,
+                        "category": category,
+                        "asn": getattr(rec, "asn", None),
+                        "org": getattr(rec, "organization", None)
+                        or getattr(rec, "provider", None),
+                        "country": getattr(rec, "country", None),
+                    }
+                )
+        if not rows:
+            return
+        try:
+            self._store.record_discoveries(rows)
+        except Exception as exc:  # noqa: BLE001 - the ledger is not load-bearing
+            self._note(state, "ledger", exc)
 
     def _scan(self, state: WatchState, settings: Settings) -> None:
         """Bidirectional scan of the watched scope, appended to history."""

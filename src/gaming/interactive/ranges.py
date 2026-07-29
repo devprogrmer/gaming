@@ -233,6 +233,26 @@ def save_discovered(
     repeated discovery never duplicates. Invalid CIDRs are ignored rather than
     raising.
     """
+    return len(
+        save_discovered_prefixes(
+            category, cidrs, metadata=metadata, origin=origin
+        )
+    )
+
+
+def save_discovered_prefixes(
+    category: str,
+    cidrs: Iterable[str] | Iterable[RangeEntry],
+    *,
+    metadata: dict[str, tuple[str | None, str | None]] | None = None,
+    origin: str = "discovered",
+) -> list[str]:
+    """Same as :func:`save_discovered` but returns *which* CIDRs were added.
+
+    The identity of the newly stored ranges — not just how many there were — is
+    what the "what's new since your last visit" ledger needs, and it is only
+    knowable here, where each prefix is checked against what is already stored.
+    """
     category = _validate_group(category)
     if category not in CATEGORIES:
         raise ValueError(f"save_discovered expects a category, got {category!r}")
@@ -241,7 +261,7 @@ def save_discovered(
     metadata = metadata or {}
     data = _read_custom()
     existing = {e.cidr for e in data[category]}
-    added = 0
+    added: list[str] = []
     for raw in cidrs:
         if isinstance(raw, RangeEntry):
             normalized = _parse_line(raw.cidr)
@@ -260,7 +280,7 @@ def save_discovered(
         data[category].append(
             RangeEntry(normalized, entry_origin, country, provider)
         )
-        added += 1
+        added.append(normalized)
     if added:
         _write_custom(data)
     return added
@@ -324,7 +344,28 @@ def persist_exhaustive_records(
     before. Everything is tagged :data:`EXHAUSTIVE_ORIGIN` so a full-country
     sweep stays distinguishable from curated discovery.
 
-    Returns a ``{category: newly_added_count}`` mapping.
+    Returns a ``{category: newly_added_count}`` mapping. Use
+    :func:`persist_exhaustive_prefixes` when the identity of the new ranges
+    matters and not just how many there were.
+    """
+    return {
+        category: len(prefixes)
+        for category, prefixes in persist_exhaustive_prefixes(
+            records, home_country=home_country
+        ).items()
+    }
+
+
+def persist_exhaustive_prefixes(
+    records: Iterable[object],
+    *,
+    home_country: str = "IR",
+) -> dict[str, list[str]]:
+    """As :func:`persist_exhaustive_records`, returning the CIDRs it inserted.
+
+    ``{category: [cidr, ...]}``, containing only ranges that were not already
+    stored. The watch loop feeds this to the discovery ledger so it can report
+    *which* ranges appeared, which a count cannot express.
     """
     from ..processing.filters import classify_category
 
@@ -346,11 +387,13 @@ def persist_exhaustive_records(
             RangeEntry(prefix, EXHAUSTIVE_ORIGIN, country, provider)
         )
 
-    added: dict[str, int] = {}
+    added: dict[str, list[str]] = {}
     for category, entries in grouped.items():
-        count = save_discovered(category, entries, origin=EXHAUSTIVE_ORIGIN)
-        if count:
-            added[category] = count
+        prefixes = save_discovered_prefixes(
+            category, entries, origin=EXHAUSTIVE_ORIGIN
+        )
+        if prefixes:
+            added[category] = prefixes
     return added
 
 

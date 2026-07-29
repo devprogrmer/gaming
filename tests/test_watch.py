@@ -6,6 +6,7 @@ import pytest
 
 from gaming.interactive import watch as watch_mod
 from gaming.interactive.settings import Settings
+from gaming.interactive.storage import HistoryStore
 from gaming.interactive.watch import WatchLoop, parse_interval
 from gaming.models import IPRecord
 
@@ -30,7 +31,7 @@ def stub(tmp_path, monkeypatch):
 
     def fake_persist(records, **kwargs):
         calls["persist"].append(len(list(records)))
-        return {"iran_datacenter": 1}
+        return {"iran_datacenter": ["5.22.0.0/21"]}
 
     def fake_run_scan(scope, settings, **kwargs):
         calls["scan"].append(scope)
@@ -47,7 +48,7 @@ def stub(tmp_path, monkeypatch):
         "gaming.discovery.exhaustive.discover_country", fake_discover
     )
     monkeypatch.setattr(
-        watch_mod.ranges_mod, "persist_exhaustive_records", fake_persist
+        watch_mod.ranges_mod, "persist_exhaustive_prefixes", fake_persist
     )
     monkeypatch.setattr(watch_mod.scanner, "run_scan", fake_run_scan)
     monkeypatch.setattr(watch_mod.scanner, "persist", fake_scan_persist)
@@ -57,7 +58,9 @@ def stub(tmp_path, monkeypatch):
 
 def _loop(**kwargs) -> WatchLoop:
     kwargs.setdefault("settings_provider", Settings)
-    kwargs.setdefault("store", object())
+    # A real in-memory store, not a dummy: the persist stage now writes the
+    # newly-discovered ranges to the "what's new" ledger.
+    kwargs.setdefault("store", HistoryStore(":memory:"))
     loop = WatchLoop(country="IR", interval_seconds=600, **kwargs)
     # Bypass the (deliberate) production floor so multi-iteration tests do not
     # actually sleep between ticks.
@@ -129,7 +132,7 @@ def test_persist_failure_still_lets_the_scan_run(stub, monkeypatch):
     def boom(records, **kwargs):
         raise OSError("disk full")
 
-    monkeypatch.setattr(watch_mod.ranges_mod, "persist_exhaustive_records", boom)
+    monkeypatch.setattr(watch_mod.ranges_mod, "persist_exhaustive_prefixes", boom)
     state = _loop().run_once()
     assert stub["scan"] == ["iran"]
     assert any("persist" in e for e in state.errors)

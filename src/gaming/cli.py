@@ -315,6 +315,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="report whether a background watch is running and exit",
     )
+    p_watch.add_argument(
+        "--whats-new",
+        action="store_true",
+        help="list the ranges discovered since this terminal last looked, then "
+        "exit; marks them as seen (the web dashboard keeps its own notice)",
+    )
 
     # check-membership (reverse lookup: which stored range holds this IP?)
     p_member = sub.add_parser(
@@ -887,6 +893,9 @@ def cmd_watch(args: argparse.Namespace, config: Config) -> int:
 
     pid_path = paths.watch_pid_path()
 
+    if getattr(args, "whats_new", False):
+        return _print_whats_new()
+
     if getattr(args, "stop", False):
         stopped = daemon_mod.stop(pid_path)
         sys.stdout.write(
@@ -953,6 +962,27 @@ def cmd_watch(args: argparse.Namespace, config: Config) -> int:
     finally:
         if getattr(args, "daemon", False):
             daemon_mod.remove_pid(pid_path)
+    return 0
+
+
+def _print_whats_new() -> int:
+    """Print the terminal's unseen discoveries and mark them seen.
+
+    Shares the ``menu`` last-visited stamp with the interactive menu — both are
+    "this terminal" — while the dashboard tracks its own, so checking one does
+    not blank the other.
+    """
+    from .interactive import whats_new as whats_new_mod
+    from .interactive.storage import HistoryStore
+
+    store = HistoryStore()
+    store.initialize()
+    result = whats_new_mod.whats_new(store, whats_new_mod.MENU)
+    sys.stdout.write(whats_new_mod.render(result, sys.stdout))
+    if result.has_new:
+        whats_new_mod.acknowledge(
+            store, whats_new_mod.MENU, up_to_id=result.up_to_id
+        )
     return 0
 
 

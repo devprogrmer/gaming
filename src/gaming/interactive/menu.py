@@ -98,6 +98,7 @@ _MENU_OPTIONS = [
     ("8", "Discover, save & scan a provider"),
     ("9", "Launch web panel"),
     ("10", "Look up a datacenter/provider by name"),
+    ("11", "What's new since your last visit"),
     ("0", "Exit"),
 ]
 
@@ -192,6 +193,11 @@ class Menu:
         while True:
             banner = render_banner(self.stdout) if first else ""
             first = False
+            # Recomputed each pass so a watcher tick during the session shows up
+            # without needing a restart.
+            notice = actions.whats_new_notice(self.store)
+            if notice:
+                self._print(theme.style(notice, "accent", self.stdout))
             self._print(render_menu(self.stdout, banner=banner))
             try:
                 choice = self._prompt("Select an option: ")
@@ -220,6 +226,8 @@ class Menu:
                     self._dispatch(actions.launch_web_panel)
                 elif choice == "10":
                     self._dispatch(actions.lookup_provider)
+                elif choice == "11":
+                    self._dispatch(actions.whats_new)
                 elif choice in ("0", "q", "quit", "exit"):
                     self._print("Goodbye.")
                     return 0

@@ -187,6 +187,8 @@ class WebApp:
         self.route("POST", "/api/discover-exhaustive", _start_exhaustive)
         self.route("GET", "/api/watch", _watch_status)
         self.route("POST", "/api/watch", _watch_control)
+        self.route("GET", "/api/whats-new", _whats_new)
+        self.route("POST", "/api/whats-new/ack", _whats_new_ack)
 
 
 def _redirect(location: str) -> Response:
@@ -756,6 +758,41 @@ def _lookup_ip(app: WebApp, req: Request) -> Response:
         result.live = membership.live_lookup(ip)
 
     return Response.json(result.as_dict())
+
+
+# --------------------------------------------------------------------------
+# "What's new since you last checked" — the watcher's discovery ledger
+# --------------------------------------------------------------------------
+def _whats_new(app: WebApp, req: Request) -> Response:
+    """Ranges the watcher found that this dashboard has not shown yet.
+
+    Reads through :mod:`gaming.interactive.whats_new`, the same function menu
+    option 11 uses, against the ``web`` last-visited stamp. Reading does not
+    acknowledge: the browser posts to ``/api/whats-new/ack`` once the user has
+    actually looked, so a page load cannot silently discard the notice.
+    """
+    from ..interactive import whats_new as whats_new_mod
+
+    result = whats_new_mod.whats_new(app.store, whats_new_mod.WEB)
+    return Response.json(result.as_dict())
+
+
+def _whats_new_ack(app: WebApp, req: Request) -> Response:
+    """Mark the dashboard as having seen the ledger. Leaves the menu's alone.
+
+    The browser sends the ``up_to_id`` it actually rendered, so a range the
+    watcher records between the page load and the click is not marked as seen.
+    """
+    from ..interactive import whats_new as whats_new_mod
+
+    raw = req.json().get("up_to_id")
+    try:
+        up_to_id = int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return Response.json({"error": "up_to_id must be an integer"}, status=400)
+
+    stamp = whats_new_mod.acknowledge(app.store, whats_new_mod.WEB, up_to_id=up_to_id)
+    return Response.json({"acknowledged": True, "last_visited": stamp})
 
 
 # --------------------------------------------------------------------------
