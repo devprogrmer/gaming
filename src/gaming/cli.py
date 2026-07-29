@@ -241,6 +241,19 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="report whether a background dashboard is running and exit",
     )
+    p_web.add_argument(
+        "--schedule",
+        default=None,
+        metavar="SCOPE",
+        help="also run recurring scans of SCOPE while the panel is up, "
+        "appending each run to history; stopped as part of Ctrl+C shutdown",
+    )
+    p_web.add_argument(
+        "--schedule-interval",
+        type=float,
+        default=900.0,
+        help="seconds between --schedule runs (default: 900)",
+    )
 
     # watch (continuous discover -> scan loop, 24/7)
     p_watch = sub.add_parser(
@@ -664,12 +677,29 @@ def cmd_web(args: argparse.Namespace, config: Config) -> int:
             )
             return 1
 
+    scheduler = None
+    schedule_scope = getattr(args, "schedule", None)
+    if schedule_scope:
+        from .interactive.scheduler import ScanScheduler
+
+        scheduler = ScanScheduler(
+            schedule_scope,
+            getattr(args, "schedule_interval", 900.0),
+            run_immediately=False,
+        )
+        scheduler.start()
+        sys.stdout.write(
+            f"Recurring '{schedule_scope}' scans every "
+            f"{scheduler.interval:.0f}s; history updates while the panel runs.\n"
+        )
+
     return serve(
         bind=getattr(args, "bind", "0.0.0.0"),
         port=getattr(args, "port", None),
         use_tls=getattr(args, "tls", False),
         reset_credentials=getattr(args, "reset_credentials", False),
         daemon=daemon,
+        scheduler=scheduler,
     )
 
 

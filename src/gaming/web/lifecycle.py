@@ -151,12 +151,15 @@ class ShutdownCoordinator:
 
     @staticmethod
     def _signals() -> tuple[int, ...]:
-        # SIGTERM matters for parity with daemon.stop(); it exists on Windows
-        # too, though only SIGINT is actually delivered there in practice.
+        # SIGTERM matters for parity with daemon.stop(). SIGBREAK is Windows-only
+        # and is what a terminal sends on Ctrl+Break; without it that keypress
+        # kills the process outright (exit 0xC000013A) with no cleanup at all,
+        # leaving the port bound.
         out = [signal.SIGINT]
-        term = getattr(signal, "SIGTERM", None)
-        if term is not None:
-            out.append(term)
+        for name in ("SIGTERM", "SIGBREAK"):
+            signum = getattr(signal, name, None)
+            if signum is not None:
+                out.append(signum)
         return tuple(out)
 
     def _handle_signal(self, signum, frame) -> None:  # noqa: ARG002 - signal ABI

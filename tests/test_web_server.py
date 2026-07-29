@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import threading
 import time
@@ -323,6 +324,69 @@ def test_serve_prints_credentials_and_url_then_runs(tmp_path, monkeypatch):
     assert "shown ONCE" in out
     # The reachable URL (detected server IP + chosen port) is printed.
     assert "http://203.0.113.7:31337/" in out
+
+
+def test_cmd_web_passes_scheduler_into_serve(tmp_path, monkeypatch):
+    """`gaming web --schedule` must hand the scheduler to serve().
+
+    Step 3 of the documented shutdown sequence stops the scan scheduler, but
+    cmd_web never constructed or passed one, so that step was a permanent no-op
+    in production no matter what the tests of ShutdownCoordinator showed.
+    """
+    from gaming import cli
+
+    captured = {}
+
+    def _fake_serve(**kwargs):
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("gaming.web.server.serve", _fake_serve)
+
+    started = []
+
+    class _FakeScheduler:
+        interval = 900.0
+
+        def __init__(self, scope, interval, **kw):
+            self.scope = scope
+
+        def start(self):
+            started.append(self.scope)
+
+    monkeypatch.setattr(
+        "gaming.interactive.scheduler.ScanScheduler", _FakeScheduler
+    )
+
+    args = argparse.Namespace(
+        bind="127.0.0.1", port=1234, tls=False, reset_credentials=False,
+        daemon=False, stop=False, status=False,
+        schedule="iran", schedule_interval=900.0,
+    )
+    rc = cli.cmd_web(args, cli.Config())
+
+    assert rc == 0
+    assert started == ["iran"], "the scheduler was never started"
+    assert captured.get("scheduler") is not None, "serve() got no scheduler"
+
+
+def test_cmd_web_without_schedule_passes_none(tmp_path, monkeypatch):
+    """No --schedule means no scheduler; the default path must not change."""
+    from gaming import cli
+
+    captured = {}
+    monkeypatch.setattr(
+        "gaming.web.server.serve",
+        lambda **kw: (captured.update(kw), 0)[1],
+    )
+
+    args = argparse.Namespace(
+        bind="127.0.0.1", port=1234, tls=False, reset_credentials=False,
+        daemon=False, stop=False, status=False,
+        schedule=None, schedule_interval=900.0,
+    )
+    assert cli.cmd_web(args, cli.Config()) == 0
+    assert captured.get("scheduler") is None
 
 
 def test_serve_ctrl_c_shuts_down_gracefully(tmp_path, monkeypatch):
@@ -693,6 +757,30 @@ def test_signal_handler_requests_stop_without_blocking(tmp_path):
     assert httpd.stopped.wait(timeout=5)
     # Cleanup has NOT run yet -- that happens on the waiting thread.
     assert not coordinator.finished.is_set()
+
+
+def test_sigbreak_is_registered_where_it_exists(tmp_path):
+    """Windows Ctrl+Break must reach the coordinator, not kill the process.
+
+    SIGBREAK is what a Windows terminal delivers on Ctrl+Break. Before it was
+    registered, that keypress terminated the process with 0xC000013A having run
+    no cleanup at all, leaving the listening port bound.
+    """
+    import signal as signal_mod
+
+    from gaming.web.lifecycle import ShutdownCoordinator
+
+    signals = ShutdownCoordinator._signals()
+    assert signal_mod.SIGINT in signals
+    assert signal_mod.SIGTERM in signals
+
+    sigbreak = getattr(signal_mod, "SIGBREAK", None)
+    if sigbreak is not None:
+        assert sigbreak in signals, "SIGBREAK exists on this platform but is unhandled"
+        # And it drives the same single stop path as SIGINT.
+        coordinator = ShutdownCoordinator(print_fn=lambda _s: None)
+        coordinator._handle_signal(sigbreak, None)
+        assert coordinator.stopping.is_set()
 
 
 def test_repeated_signal_escalates_to_immediate_exit(tmp_path):
