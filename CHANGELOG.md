@@ -6,6 +6,87 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-30
+
+This release comes out of an audit of the v0.9.0 README against real behaviour.
+Six claimed capabilities were checked by running them, not by reading the code.
+**Two of the six turned out to be already working as documented**; the audit is
+reported honestly below, including where the original report of breakage was
+wrong.
+
+### Added
+- **Live provider lookup by name** (`gaming discover --provider-name "<org>"`).
+  Name-based discovery previously matched only against the bundled
+  `providers.toml` seed list, so a real, registered company absent from that
+  file returned nothing at all. Lookups now query the registries directly via
+  RDAP entity search (ARIN `?name=`, RIPE `/entities?fn=` followed by the
+  linked networks) and return CIDR, ASN, and country. A name matching several
+  distinct organizations returns all of them. A name matching nothing reports
+  that explicitly instead of returning silent emptiness.
+
+  `--provider-name` is a **new, separate flag**: the existing `--provider`
+  keeps its exact previous seed-list behaviour, so existing scripts do not
+  change.
+- **A dedicated provider lookup on all three surfaces.** The CLI flag above, a
+  menu option, and a "Look up a provider by name" panel in the dashboard. All
+  three call one shared function, so they cannot drift apart in what they find
+  or in how they report failure.
+- **Scan a specific CIDR from the web panel.** Every row on Search, provider
+  lookup, and "what's new" now carries a *Scan* button that runs a reachability
+  sweep scoped to that single range, plus a manual "type or paste a CIDR" input
+  on Live Scan. Both reuse the existing `interactive/scanner.py` pipeline and
+  `web/jobs.py` job polling rather than reimplementing scanning.
+- **"What's new since your last visit."** The 24/7 watcher previously reported
+  only *how many* ranges a cycle added, and that count was not stored anywhere
+  — so returning after a week told you nothing about what had actually been
+  found. Each cycle now diffs newly-discovered prefixes against what is already
+  known and records them, with ASN, organization, and country, in a durable
+  ledger.
+
+  Surfaced as a menu banner plus menu option 11, `gaming watch --whats-new`,
+  and an Overview panel in the dashboard. **Last-visited is tracked per
+  surface**: reading the notice in the terminal does not clear it in the
+  browser, so someone running the watcher on a server and checking both places
+  does not silently lose one of the two reports. Reading never acknowledges —
+  the stamp moves only when you have actually looked, and only as far as what
+  was displayed, so a discovery arriving mid-read stays unread.
+- **Recurring scans alongside the web panel** (`gaming web --schedule <scope>
+  --schedule-interval <seconds>`), stopped as part of the same shutdown path.
+
+### Fixed
+- **Ctrl+C during a web-panel session: two real defects, but not the reported
+  one.** The report was that Ctrl+C does not shut the panel down. Reproduced
+  against a real process with a scan job in flight, **Ctrl+C already worked** —
+  the v0.8.0 `ShutdownCoordinator` did what it claimed. Two narrower defects
+  were real:
+
+  1. `cmd_web` never passed a scheduler to `serve()`, so step 3 of the
+     documented five-step shutdown sequence was a permanent no-op in
+     production — there was never a scheduler for it to stop. There is now,
+     via `--schedule`.
+  2. Only `SIGINT` and `SIGTERM` were registered, so on Windows **Ctrl+Break
+     bypassed the handler entirely**: measured exit `0xC000013A`, no cleanup
+     output, port left bound. It now goes through the same single path —
+     measured exit 0, full shutdown sequence, and an immediate rebind on the
+     same port.
+- **Latency was rendered at full binary precision** in the dashboard:
+  `217.39859999979773` ms in a column a ping resolves to one decimal. Found by
+  looking at the rendered page, not at the code. The unrounded value stays on
+  the row, so sorting and CSV/JSON export are unaffected.
+- **An empty results container painted a stray bordered sliver** under the
+  panel that owned it — visible on Overview once "what's new" was acknowledged.
+  It now collapses until it has rows or a placeholder to show.
+
+### Audited, already correct
+- **The dashboard's dark-mode visual system was already implemented.** The
+  report listed it as outstanding. Verified by driving real Chrome through
+  every view over the DevTools protocol: all CSS custom properties resolve,
+  monospace is used for data and sans-serif for chrome, table headers are
+  sticky, verdicts are pill badges, numeric columns are right-aligned,
+  empty/loading/error states are styled, nav marks the active view, and the
+  sidebar folds into a top nav below 820px with no horizontal overflow. The two
+  rendering defects listed above were found during that pass and fixed.
+
 ## [0.9.0] - 2026-07-28
 
 ### Added
@@ -535,7 +616,8 @@ across the web dashboard, the terminal UI, and the documentation.
 - CLI subcommands: `sources`, `discover`, `check`, `run`.
 - Test suite (52 tests, fully offline) and packaging for distribution.
 
-[Unreleased]: https://github.com/devprogrmer/gaming/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/devprogrmer/gaming/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/devprogrmer/gaming/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/devprogrmer/gaming/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/devprogrmer/gaming/compare/v0.7.0...v0.8.0
 [0.5.0]: https://github.com/devprogrmer/gaming/compare/v0.4.0...v0.5.0

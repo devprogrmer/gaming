@@ -75,6 +75,33 @@ no webfonts**. It works identically on an air-gapped host. Sessions are
 authenticated with generated credentials shown once on first run; optional
 self-signed TLS is available via `--tls`.
 
+Any range you can see, you can probe: every row on Search, provider lookup, and
+"what's new" has a **Scan** button that sweeps that one CIDR, and Live Scan
+accepts a typed or pasted CIDR directly.
+
+### Find a provider by name, even one nobody seeded
+
+`gaming discover --provider-name "<org>"` asks the registries directly — RDAP
+entity search against ARIN and RIPE — instead of matching against the bundled
+seed list. A real company nobody has added to `providers.toml` is still found,
+with its CIDRs, ASN, and country. A name matching several organizations returns
+all of them; a name matching nothing says so plainly. The same lookup backs the
+CLI flag, the menu option, and the dashboard panel.
+
+The existing `--provider` flag is unchanged and still searches the seed list.
+
+### "What's new since your last visit"
+
+The 24/7 watcher (`gaming watch`) diffs each cycle's discoveries against what it
+already knew and keeps a durable record of the genuinely-new ranges. Come back
+after a week and the menu, `gaming watch --whats-new`, and the dashboard will
+each tell you what appeared while you were away — with ASN, organization, and
+country.
+
+Last-visited is tracked **per surface**, so reading the notice in the terminal
+does not clear it in the browser. Reading never acknowledges: the marker moves
+only once you have actually looked, and only as far as what you were shown.
+
 ### Scheduled monitoring and change alerts
 
 `gaming schedule` re-runs a saved scope on an interval, appending each run to
@@ -239,7 +266,7 @@ Run `gaming` with no arguments (or `gaming menu`):
 
 ```
 ==================================================
-   devprogrmer * IP Health Scanner   (v0.9.0)
+   devprogrmer * IP Health Scanner   (v0.10.0)
 ==================================================
   1) Scan saved ranges (datacenter / CDN / both)
   2) Discover & save provider ranges
@@ -250,8 +277,10 @@ Run `gaming` with no arguments (or `gaming menu`):
   7) Filter CIDRs by first octet
   8) Discover, save & scan a provider
   9) Launch web panel
+  10) Look up a datacenter/provider by name
+  11) What's new since your last visit
   0) Exit
---------------------------------------------------
+----------------------------------------------------
 ```
 
 | Option | What it does |
@@ -265,6 +294,8 @@ Run `gaming` with no arguments (or `gaming menu`):
 | **7) Filter CIDRs by first octet** | Discover and filter dynamically by leading octet + datacenter. |
 | **8) Discover, save & scan a provider** | One provider: discover → save → scan, in a single step. |
 | **9) Launch web panel** | Start the same dashboard as `gaming web` in this process. Prompts for bind/port/TLS, and Ctrl+C stops it cleanly and returns to the menu. |
+| **10) Look up a datacenter/provider by name** | Type an organization name; the registries are queried live (RDAP) and every matching org's CIDRs, ASN, and country are shown, with the option to save them for later scans. |
+| **11) What's new since your last visit** | The ranges `gaming watch` discovered since this menu last looked. Reading marks them seen here only — the dashboard keeps its own notice. |
 | **0) Exit** | Quit. |
 
 ### Command line
@@ -281,6 +312,9 @@ gaming --offline discover --foreign-datacenter --collapse --format csv -o foreig
 
 # check specific prefixes (local liveness + port probe)
 gaming check 1.1.1.1 8.8.8.0/24 --ports 80,443 --format console
+
+# look one named provider up in the registries (not just the seed list)
+gaming discover --provider-name "Zenlayer" --format console
 
 # full pipeline: discover → filter → normalize → reachability → report
 gaming --offline run --country IR --ports 80,443 --format json -o report.json
@@ -303,6 +337,9 @@ gaming web --tls
 
 # regenerate the username/password and invalidate all sessions
 gaming web --reset-credentials
+
+# also re-scan the Iranian ranges every 30 minutes while the panel is up
+gaming web --schedule iran --schedule-interval 1800
 ```
 
 **Stopping it.** Press **Ctrl+C**. The panel stops in an orderly sequence: it
@@ -405,11 +442,19 @@ gaming watch --stop
 
 # run exactly 5 iterations and exit (useful for testing)
 gaming watch --country IR --interval 30m --count 5
+
+# what did it find while you were away? (marks them as seen)
+gaming watch --whats-new
 ```
 
 Interval accepts `30m`, `2h`, `1d`, or bare seconds (minimum 5 minutes).
 One bad iteration logs the error and continues — the watcher never stops on
 its own. The watch loop is also startable and stoppable from the web dashboard.
+
+Each cycle records the ranges it discovered for the first time, so
+`--whats-new` reports what actually appeared rather than a bare count. The
+terminal and the dashboard track their own last-visited markers: checking one
+leaves the other's notice intact.
 
 **`--format ip-list`** emits one host address per line with no metadata, safe
 for shell redirection. Progress, "saved N ranges", and "written: …" messages
