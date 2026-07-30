@@ -172,9 +172,19 @@ function navigate(view) {
 for (const link of document.querySelectorAll(".nav-link"))
   link.addEventListener("click", () => navigate(link.dataset.view));
 
+// Round-trip float latencies arrive with full binary precision (217.39859999979773).
+// One decimal is the resolution a ping actually has; the unrounded value stays on
+// the row for sorting and export.
+function fmtMs(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toFixed(1) : String(v);
+}
+
 // ---- generic sortable table ---------------------------------------------
 // Columns may declare `num: true` to be right-aligned with tabular figures,
-// `badge: true` to render as a status pill, or `action` for a control.
+// `badge: true` to render as a status pill, `action` for a control, or `fmt`
+// to format a raw value for display without disturbing the value that sorting
+// and export use.
 function renderTable(tableEl, columns, rows) {
   tableEl.innerHTML = "";
   const thead = el("thead");
@@ -200,7 +210,8 @@ function renderTable(tableEl, columns, rows) {
       if (col.num) td.className = "num";
       if (col.action) td.append(col.action(row));
       else if (col.badge) td.append(badge(val));
-      else td.textContent = val === null || val === undefined ? "-" : String(val);
+      else if (val === null || val === undefined) td.textContent = "-";
+      else td.textContent = col.fmt ? col.fmt(val) : String(val);
       tr.append(td);
     }
     tbody.append(tr);
@@ -474,7 +485,7 @@ function hostColumns() {
   return [
     { key: "host", label: "HOST" },
     { key: "health", label: "HEALTH", badge: true },
-    { key: "avg_ms", label: "AVG(ms)", num: true },
+    { key: "avg_ms", label: "AVG(ms)", num: true, fmt: fmtMs },
     { key: "abroad_label", label: "ABROAD" },
     { key: "combined", label: "WHITELIST", badge: true },
     { key: "ports_label", label: "PORTS" },
@@ -604,7 +615,7 @@ function renderProximityResult(sourceIp, dest, res) {
     const reachTxt = res.reachable === true ? "yes" : res.reachable === false ? "no" : "unknown";
     const dl = el("dl", { class: "kv" });
     dl.append(el("dt", {}, "Reachable"), el("dd", {}, reachTxt));
-    if (res.avg_ms != null) dl.append(el("dt", {}, "Avg latency"), el("dd", {}, `${res.avg_ms} ms`));
+    if (res.avg_ms != null) dl.append(el("dt", {}, "Avg latency"), el("dd", {}, `${fmtMs(res.avg_ms)} ms`));
     if (res.probe_id != null)
       dl.append(el("dt", {}, "Probe"), el("dd", {}, `#${res.probe_id} (AS${res.probe_asn || "?"})`));
     box.append(dl);
@@ -663,7 +674,7 @@ async function loadScanDetail(scanId) {
   renderTable($("#history-detail-table"),
     [
       { key: "host", label: "HOST" }, { key: "health", label: "HEALTH", badge: true },
-      { key: "avg_ms", label: "AVG(ms)", num: true },
+      { key: "avg_ms", label: "AVG(ms)", num: true, fmt: fmtMs },
       { key: "combined", label: "WHITELIST", badge: true },
     ], rows);
 }

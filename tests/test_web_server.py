@@ -1156,6 +1156,39 @@ def test_asset_loader_blocks_traversal():
     assert assets.load_asset("a/b.css") is None
 
 
+def test_latency_is_formatted_before_display():
+    """Raw float latencies must not reach the table.
+
+    A round-tripped ping average arrives as 217.39859999979773; rendering it
+    unmodified put fifteen decimals in a column with one digit of real
+    resolution. Every ``avg_ms`` column therefore declares a formatter, and the
+    formatter rounds — the unrounded value stays on the row so sorting and
+    export are unaffected.
+    """
+    from gaming.web import assets
+
+    js = assets.load_asset("app.js").decode("utf-8")
+    assert "function fmtMs(" in js
+    assert "toFixed(1)" in js
+    for line in js.splitlines():
+        if '"avg_ms"' in line and "label:" in line:
+            assert "fmt: fmtMs" in line, f"unformatted latency column: {line.strip()}"
+
+
+def test_empty_results_container_collapses():
+    """An empty table wrapper must not paint a stray bordered sliver.
+
+    ``.table-wrap`` carries the border and background for results tables. A view
+    whose table has neither rows nor a placeholder — the Overview "what's new"
+    panel once acknowledged — would otherwise leave an empty bordered strip
+    under the panel that owns it.
+    """
+    from gaming.web import assets
+
+    css = assets.load_asset("app.css").decode("utf-8")
+    assert ".table-wrap:not(:has(tbody tr)):not(:has(.empty-state))" in css
+
+
 # ---- scanning one caller-specified CIDR ----------------------------------
 def test_web_scan_one_specified_cidr_scans_only_that_range(env, monkeypatch):
     """A single typed-in CIDR is scanned on its own, not as a whole category.

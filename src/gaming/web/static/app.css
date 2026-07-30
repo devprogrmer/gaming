@@ -375,6 +375,14 @@ button.secondary:hover:not(:disabled) { background: var(--surface-3); }
   background: var(--surface);
 }
 
+/* A results container holding neither a table nor a placeholder would still
+ * paint its border and background — a stray empty sliver under the panel that
+ * owns it. Collapse it until it has something to show. */
+.table-wrap:not(:has(tbody tr)):not(:has(.empty-state)) {
+  border: none;
+  background: none;
+}
+
 table {
   border-collapse: separate;
   border-spacing: 0;
